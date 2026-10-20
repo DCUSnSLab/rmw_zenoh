@@ -60,9 +60,10 @@ void run(const rclcpp::Node::SharedPtr & node, bool publisher)
   const auto warmup = node->declare_parameter<int>("warmup", 10);
   const auto hz = node->declare_parameter<double>("hz", 30.0);
   if (publisher) {
+    const auto subscribers = node->declare_parameter<int>("subscribers", 1);
     auto pub = node->create_publisher<Message>("loan_benchmark", rclcpp::QoS(5));
     std::printf("publisher can_loan=%d\n", pub->can_loan_messages());
-    while (rclcpp::ok() && pub->get_subscription_count() == 0) {
+    while (rclcpp::ok() && pub->get_subscription_count() < static_cast<size_t>(subscribers)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -82,6 +83,7 @@ void run(const rclcpp::Node::SharedPtr & node, bool publisher)
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
   } else {
+    const auto hold_ms = node->declare_parameter<int>("hold_ms", 0);
     int received = 0;
     uint64_t checksum = 0;
     std::vector<double> latencies;
@@ -90,6 +92,15 @@ void run(const rclcpp::Node::SharedPtr & node, bool publisher)
         if (++received <= warmup) {
           if (received == warmup) {
             reset_copies();
+          }
+          if (received == 1 && hold_ms > 0) {
+            // The publisher keeps writing new loans while this one is held.
+            const auto first = msg.data.front();
+            std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
+            const bool intact = std::all_of(
+              msg.data.begin(), msg.data.end(), [first](auto b) {return b == first;});
+            std::printf(
+              "held %d ms: %s\n", static_cast<int>(hold_ms), intact ? "intact" : "changed");
           }
           return;
         }

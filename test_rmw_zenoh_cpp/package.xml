@@ -9,6 +9,7 @@
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <test_depend>ament_cmake_ros</test_depend>
   <test_depend>ament_lint_auto</test_depend>
@@ -16,11 +17,11 @@
   <test_depend>rclcpp</test_depend>
   <test_depend>rcpputils</test_depend>
   <test_depend>rmw_zenoh_cpp</test_depend>
-  <test_depend>test_msgs</test_depend>
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <test_depend>sensor_msgs</test_depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
+  <test_depend>test_msgs</test_depend>
   <test_depend>zenoh_cpp_vendor</test_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <export>
     <build_type>ament_cmake</build_type>

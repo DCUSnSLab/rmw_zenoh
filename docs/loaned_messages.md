@@ -97,6 +97,8 @@ export ZENOH_CONFIG_OVERRIDE='transport/shared_memory/enabled=true'
 Use `image` in place of `plain` for the non-plain `sensor_msgs/Image` control.
 Use `both` in place of `pub`/`sub` for a session-local functional measurement.
 Parameters `count` (default 120), `warmup` (10), and `hz` (30) are ROS parameters.
+The publisher waits for `subscribers` (1) matched subscriptions. A subscriber with
+`hold_ms` keeps its first message for that long and reports whether it changed.
 The benchmark uses const-reference callbacks and reports callback-entry latency
 p50/p99 and a payload checksum. Preloading `libmemcount.so` measures large
 `memcpy`/`memmove` calls; both sides reset its counters after warmup. A zero result
