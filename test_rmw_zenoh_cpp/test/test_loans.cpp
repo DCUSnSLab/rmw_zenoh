@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rmw/rmw.h"
 #include "rmw/error_handling.h"
@@ -330,6 +331,114 @@ TEST_F(TestLoans, transient_local_and_publisher_destruction)
   EXPECT_EQ(123, static_cast<Plain *>(received)->stamp);
   EXPECT_EQ(91, static_cast<Plain *>(received)->data.back());
   EXPECT_EQ(RMW_RET_OK, rmw_return_loaned_message_from_subscription(handle, received));
+}
+
+void publish_plain(
+  rclcpp::Publisher<Plain> & publisher, int64_t stamp, void ** borrowed = nullptr)
+{
+  auto message = publisher.borrow_loaned_message();
+  if (borrowed) {
+    *borrowed = &message.get();
+  }
+  message.get().stamp = stamp;
+  message.get().data.fill(static_cast<uint8_t>(stamp));
+  publisher.publish(std::move(message));
+}
+
+bool intact(const Plain & message, int64_t stamp)
+{
+  const auto byte = static_cast<uint8_t>(stamp);
+  const auto matches = [byte](uint8_t b) {return b == byte;};
+  return message.stamp == stamp && std::all_of(message.data.begin(), message.data.end(), matches);
+}
+
+template<typename Condition>
+void spin_until(rclcpp::Executor & executor, Condition condition)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!condition() && std::chrono::steady_clock::now() < deadline) {
+    executor.spin_some(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(condition());
+}
+
+TEST_F(TestLoans, user_is_last_owner)
+{
+  std::shared_ptr<const Plain> kept;
+  int received = 0;
+  auto keeper = node->create_subscription<Plain>(
+    "kept_loans", 1, [&](std::shared_ptr<const Plain> message) {
+      if (!kept) {
+        kept = message;
+      }
+      ++received;
+    });
+  auto publisher = node->create_publisher<Plain>("kept_loans", 1);
+  ASSERT_TRUE(keeper->can_loan_messages());
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  publish_plain(*publisher, 1);
+  spin_until(executor, [&]() {return received == 1;});
+  void * first = const_cast<Plain *>(kept.get());
+  for (int64_t stamp = 2; stamp < 30; ++stamp) {
+    void * borrowed = nullptr;
+    publish_plain(*publisher, stamp, &borrowed);
+    EXPECT_NE(first, borrowed);
+    spin_until(executor, [&]() {return received == stamp;});
+  }
+  EXPECT_TRUE(intact(*kept, 1));
+  kept.reset();
+  EXPECT_NE(RMW_RET_OK, rmw_return_loaned_message_from_subscription(handle(*keeper), first));
+  rmw_reset_error();
+  bool reused = false;
+  for (int64_t stamp = 30; stamp < 60 && !reused; ++stamp) {
+    void * borrowed = nullptr;
+    publish_plain(*publisher, stamp, &borrowed);
+    reused = first == borrowed;
+    spin_until(executor, [&]() {return received == stamp;});
+  }
+  EXPECT_TRUE(reused);
+}
+
+TEST_F(TestLoans, subscription_is_last_owner)
+{
+  auto idle = node->create_subscription<Plain>("queued_loans", 3, [](const Plain &) {});
+  auto publisher = node->create_publisher<Plain>("queued_loans", 3);
+  auto churn = node->create_publisher<Plain>("churn_loans", 1);
+  for (int64_t stamp = 1; stamp <= 3; ++stamp) {
+    publish_plain(*publisher, stamp);
+  }
+  for (int64_t stamp = 10; stamp < 40; ++stamp) {
+    publish_plain(*churn, stamp);
+  }
+  for (int64_t stamp = 1; stamp <= 3; ++stamp) {
+    void * received = take_loan(handle(*idle));
+    ASSERT_NE(nullptr, received);
+    EXPECT_TRUE(intact(*static_cast<Plain *>(received), stamp));
+    EXPECT_EQ(RMW_RET_OK, rmw_return_loaned_message_from_subscription(handle(*idle), received));
+  }
+}
+
+TEST_F(TestLoans, user_held_loans_exhaust_the_pool)
+{
+  std::vector<std::shared_ptr<const Plain>> kept;
+  auto keeper = node->create_subscription<Plain>(
+    "held_loans", 20, [&](std::shared_ptr<const Plain> message) {kept.push_back(message);});
+  auto publisher = node->create_publisher<Plain>("held_loans", 20);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  const int64_t count = 20;
+  for (int64_t stamp = 1; stamp <= count; ++stamp) {
+    publish_plain(*publisher, stamp);
+    spin_until(executor, [&]() {return kept.size() == static_cast<size_t>(stamp);});
+  }
+  for (int64_t stamp = 1; stamp <= count; ++stamp) {
+    EXPECT_TRUE(intact(*kept[stamp - 1], stamp)) << stamp;
+  }
+  kept.clear();
+  publish_plain(*publisher, 99);
+  spin_until(executor, [&]() {return kept.size() == 1;});
+  EXPECT_TRUE(intact(*kept.front(), 99));
 }
 
 class TestNoLoans : public ::testing::Test {};

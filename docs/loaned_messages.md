@@ -3,9 +3,12 @@
 Publishers and subscriptions support the RMW loan API when Zenoh shared memory is
 configured and the message has a compatible fixed memory layout. Applications can
 use `rclcpp::Publisher::borrow_loaned_message()` without application changes.
-Subscriptions must enable loans with `ROS_DISABLE_LOANED_MESSAGES=0`. The current
-Jazzy rclcpp executor returns subscription loans immediately after the callback;
-use a `const Message &` callback and do not retain references beyond the callback.
+Subscriptions must enable loans with `ROS_DISABLE_LOANED_MESSAGES=0`. The overlay
+rclcpp returns a subscription loan when the last `shared_ptr` to the message is
+released, so a callback may keep the message; the held loan pins its SHM chunk and
+keeps the rcl subscription alive. Binaries compiled against the stock Jazzy rclcpp
+headers keep the stock behavior: the executor returns their loans right after the
+callback, so they must not retain references beyond the callback.
 A taken loan points into memory shared with the publisher and with every other
 subscriber of the same sample, in this and other processes. Do not modify it.
 rclcpp disables middleware loans for publishers using intra-process communication
@@ -81,6 +84,8 @@ heap returns `RMW_RET_BAD_ALLOC`.
 loans, return errors, mixed takes, C type support, nested layouts, padding rejection,
 opposite-endian CDR, serialized takes, transient-local history, pool exhaustion,
 a pool that is not reserved by entity creation, and SHM disabled or undersized.
+With rclcpp they cover the last owner of a loan (a callback that keeps the message,
+a queued sample) and callbacks holding enough loans to exhaust the pool.
 
 The build also provides `loan_benchmark`. Use separate publisher and subscriber
 processes for transport measurements:
