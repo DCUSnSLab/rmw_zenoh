@@ -491,7 +491,7 @@ private:
         msgsize_threshold);
 
       shm_ = std::make_shared<rmw_zenoh_cpp::ShmContext>(
-          msgsize_threshold
+          msgsize_threshold, shm_pool_size
       );
     } else {
       RMW_ZENOH_LOG_DEBUG_NAMED("rmw_zenoh_cpp", "SHM is disabled");

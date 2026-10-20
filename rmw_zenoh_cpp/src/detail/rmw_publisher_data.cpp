@@ -207,6 +207,92 @@ PublisherData::PublisherData(
   events_mgr_ = std::make_shared<EventsManager>();
 }
 
+bool PublisherData::configure_loaning(
+  const rosidl_message_type_support_t * typesupport, ShmContext * shm)
+{
+  if (!shm) {
+    return false;
+  }
+  auto type = LoanType::make(
+    typesupport, static_cast<const message_type_support_callbacks_t *>(type_support_impl_));
+  if (!type) {
+    return false;
+  }
+  auto provider = shm->get_loan_provider();
+  if (!provider || !loan_layout_fits(*type, *provider)) {
+    return false;
+  }
+  loan_type_ = std::move(type);
+  return true;
+}
+
+rmw_ret_t PublisherData::borrow_loaned_message(
+  const rosidl_message_type_support_t * typesupport, void ** message, ShmContext * shm)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (is_shutdown_) {
+    RMW_SET_ERROR_MSG("publisher is shutdown");
+    return RMW_RET_ERROR;
+  }
+  if (!loan_type_) {
+    return RMW_RET_UNSUPPORTED;
+  }
+  if (typesupport->data != type_support_impl_) {
+    RMW_SET_ERROR_MSG("loan type does not match the publisher");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  auto provider = shm->get_loan_provider();
+  auto buffer = LoanBuffer::allocate(
+    *loan_type_, rmw_node_->context->options.allocator,
+    provider.get());
+  if (!buffer) {
+    RMW_SET_ERROR_MSG("unable to allocate loaned message");
+    return RMW_RET_BAD_ALLOC;
+  }
+  *message = buffer->data();
+  loans_.emplace(*message, std::move(buffer));
+  return RMW_RET_OK;
+}
+
+rmw_ret_t PublisherData::return_loaned_message(void * message)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (loans_.erase(message) == 0) {
+    RMW_SET_ERROR_MSG("message is not a loan from this publisher");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  return RMW_RET_OK;
+}
+
+rmw_ret_t PublisherData::publish_loaned_message(void * message)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (is_shutdown_) {
+    RMW_SET_ERROR_MSG("publisher is shutdown");
+    return RMW_RET_ERROR;
+  }
+  auto loan = loans_.find(message);
+  if (loan == loans_.end()) {
+    RMW_SET_ERROR_MSG("message is not a loan from this publisher");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  const int64_t timestamp = get_system_time_in_ns();
+  auto opts = zenoh::ext::AdvancedPublisher::PutOptions::create_default();
+  opts.put_options.attachment = AttachmentData(
+    sequence_number_++, timestamp, entity_->copy_gid()).serialize_to_zbytes();
+  auto payload = loan->second->release_payload();
+  TRACETOOLS_TRACEPOINT(
+    rmw_publish, static_cast<const void *>(rmw_publisher_), message, timestamp);
+  zenoh::ZResult result;
+  pub_.put(std::move(payload), std::move(opts), &result);
+  if (result != Z_OK) {
+    RMW_SET_ERROR_MSG("unable to publish loaned message");
+    return RMW_RET_ERROR;
+  }
+  loans_.erase(loan);
+  return RMW_RET_OK;
+}
+
 ///=============================================================================
 rmw_ret_t PublisherData::publish(
   const void * ros_message,

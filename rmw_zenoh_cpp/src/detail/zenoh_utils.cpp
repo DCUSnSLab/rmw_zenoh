@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <memory>
 #include <utility>
 
 #include "attachment_helpers.hpp"
@@ -73,64 +74,49 @@ int64_t get_system_time_in_ns()
 
 ///=============================================================================
 Payload::Payload(const zenoh::Bytes & bytes)
-{
-  // NOTE(fuzzypixelz): `zenoh::Bytes` is an list of reference-couted buffers. When the list of
-  // buffers contains exactly one element, it is not necessary to concatenate the list of buffers.
-  // In this case, we store a clone of the bytes object to maintain a non-zero reference-count on
-  // the buffer. This ensures that the slice into said buffer stays valid until we drop our copy
-  // of the bytes object (at the very least). This case corresponds to the `Contiguous`
-  // alternative of the `bytes_` variant and aims to optimize away a memcpy during "session-local"
-  // communication.
+: bytes_(bytes.clone())
+{}
 
-  zenoh::Bytes::SliceIterator slices = bytes.slice_iter();
-  std::optional<zenoh::Slice> slice = slices.next();
-  if (!slice.has_value()) {
-    bytes_ = nullptr;
-  } else {
-    if (!slices.next().has_value()) {
-      bytes_ = Contiguous {slice.value(), bytes.clone()};
-    } else {
-      bytes_ = bytes.as_vector();
+///=============================================================================
+const uint8_t * Payload::contiguous_data(size_t offset, size_t length) const
+{
+  auto slices = bytes_.slice_iter();
+  while (auto slice = slices.next()) {
+    if (offset < slice->len) {
+      return length <= slice->len - offset ? slice->data + offset : nullptr;
     }
+    offset -= slice->len;
   }
+  return nullptr;
 }
 
 ///=============================================================================
 const uint8_t * Payload::data() const
 {
-  if (std::holds_alternative<Empty>(bytes_)) {
-    return nullptr;
-  } else if (std::holds_alternative<NonContiguous>(bytes_)) {
-    return std::get<NonContiguous>(bytes_).data();
-  } else {
-    return std::get<Contiguous>(bytes_).slice.data;
+  if (const auto * data = contiguous_data(0, size())) {
+    return data;
   }
+  if (!contiguous_) {
+    contiguous_ = bytes_.as_vector();
+  }
+  return contiguous_->data();
 }
 
 ///=============================================================================
 size_t Payload::size() const
 {
-  if (std::holds_alternative<Empty>(bytes_)) {
-    return 0;
-  } else if (std::holds_alternative<NonContiguous>(bytes_)) {
-    return std::get<NonContiguous>(bytes_).size();
-  } else {
-    return std::get<Contiguous>(bytes_).slice.len;
-  }
+  return bytes_.size();
 }
 
 ///=============================================================================
 bool Payload::empty() const
 {
-  return std::holds_alternative<Empty>(bytes_);
+  return bytes_.size() == 0;
 }
 
 ///=============================================================================
-// Create Layout for provider's memory
-// Provider's alignment is 1 (=2^0) bytes as we are going to make only 1-byte aligned allocations
-// TODO(yellowhatter): use zenoh_shm_message_size_threshold as base for alignment
-ShmContext::ShmContext(size_t msgsize_threshold)
-: msgsize_threshold(msgsize_threshold)
+ShmContext::ShmContext(size_t msgsize_threshold, size_t pool_size)
+: msgsize_threshold(msgsize_threshold), pool_size_(pool_size)
 {}
 
 std::optional<zenoh::SharedShmProvider> ShmContext::get_shm_provider(zenoh::Session & session)
@@ -140,6 +126,26 @@ std::optional<zenoh::SharedShmProvider> ShmContext::get_shm_provider(zenoh::Sess
     return std::get<zenoh::SharedShmProvider>(std::move(maybe_provider));
   }
   return std::nullopt;
+}
+
+
+std::shared_ptr<zenoh::PosixShmProvider> ShmContext::get_loan_provider()
+{
+  std::lock_guard<std::mutex> lock(loan_mutex_);
+  if (!loan_provider_) {
+    // The transport provider only supports byte alignment. ROS structs require up to eight.
+    zenoh::ZResult result;
+    zenoh::MemoryLayout layout((pool_size_ + 7) & ~size_t{7}, zenoh::AllocAlignment{3}, &result);
+    if (result != Z_OK) {
+      return nullptr;
+    }
+    auto provider = std::make_shared<zenoh::PosixShmProvider>(layout, &result);
+    if (result != Z_OK) {
+      return nullptr;
+    }
+    loan_provider_ = std::move(provider);
+  }
+  return loan_provider_;
 }
 
 

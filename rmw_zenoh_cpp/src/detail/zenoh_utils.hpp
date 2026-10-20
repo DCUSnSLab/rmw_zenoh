@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -88,17 +89,11 @@ public:
 
   bool empty() const;
 
+  const uint8_t * contiguous_data(size_t offset, size_t length) const;
+
 private:
-  struct Contiguous
-  {
-    zenoh::Slice slice;
-    zenoh::Bytes bytes;
-  };
-  using NonContiguous = std::vector<uint8_t>;
-  using Empty = std::nullptr_t;
-  // Is `std::vector<uint8_t>` in case of a non-contiguous payload
-  // and `zenoh::Slice` plus a `zenoh::Bytes` otherwise.
-  std::variant<NonContiguous, Contiguous, Empty> bytes_;
+  zenoh::Bytes bytes_;
+  mutable std::optional<std::vector<uint8_t>> contiguous_;
 };
 
 ///=============================================================================
@@ -106,9 +101,16 @@ struct ShmContext
 {
   size_t msgsize_threshold;
 
-  explicit ShmContext(size_t msgsize_threshold);
+  explicit ShmContext(size_t msgsize_threshold, size_t pool_size);
 
   std::optional<zenoh::SharedShmProvider> get_shm_provider(zenoh::Session & session);
+
+  std::shared_ptr<zenoh::PosixShmProvider> get_loan_provider();
+
+private:
+  size_t pool_size_;
+  std::mutex loan_mutex_;
+  std::shared_ptr<zenoh::PosixShmProvider> loan_provider_;
 };
 
 ///=============================================================================

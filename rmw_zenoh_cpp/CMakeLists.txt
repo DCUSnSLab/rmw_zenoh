@@ -21,6 +21,8 @@ find_package(rcutils REQUIRED)
 find_package(rosidl_typesupport_fastrtps_c REQUIRED)
 find_package(rosidl_typesupport_fastrtps_cpp REQUIRED)
 find_package(rmw REQUIRED)
+find_package(rosidl_typesupport_introspection_c REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(tracetools REQUIRED)
 find_package(zenoh_cpp_vendor REQUIRED)
 
@@ -29,6 +31,7 @@ add_library(rmw_zenoh_cpp SHARED
   src/detail/cdr.cpp
   src/detail/event.cpp
   src/detail/identifier.cpp
+  src/detail/loaned_message.cpp
   src/detail/graph_cache.cpp
   src/detail/guard_condition.cpp
   src/detail/liveliness_utils.cpp
@@ -67,6 +70,8 @@ target_link_libraries(rmw_zenoh_cpp
     rcutils::rcutils
     rosidl_typesupport_fastrtps_c::rosidl_typesupport_fastrtps_c
     rosidl_typesupport_fastrtps_cpp::rosidl_typesupport_fastrtps_cpp
+    rosidl_typesupport_introspection_c::rosidl_typesupport_introspection_c
+    rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp
     rmw::rmw
     tracetools::tracetools
     zenohcxx::zenohc

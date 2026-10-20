@@ -17,6 +17,9 @@
   <test_depend>rcpputils</test_depend>
   <test_depend>rmw_zenoh_cpp</test_depend>
   <test_depend>test_msgs</test_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
   <test_depend>zenoh_cpp_vendor</test_depend>
 
   <export>

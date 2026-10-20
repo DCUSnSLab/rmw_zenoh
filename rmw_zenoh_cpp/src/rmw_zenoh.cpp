@@ -115,6 +115,65 @@ const rosidl_service_type_support_t * find_service_type_support(
   return type_support;
 }
 
+rmw_ret_t get_loan_publisher(
+  const rmw_publisher_t * publisher, rmw_zenoh_cpp::PublisherDataPtr & data,
+  rmw_context_impl_s *& context)
+{
+  RMW_CHECK_ARGUMENT_FOR_NULL(publisher, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(
+    publisher, publisher->implementation_identifier, rmw_zenoh_cpp::rmw_zenoh_identifier,
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
+  if (!publisher->can_loan_messages) {
+    RMW_SET_ERROR_MSG("publisher does not support loans");
+    return RMW_RET_UNSUPPORTED;
+  }
+  RMW_CHECK_ARGUMENT_FOR_NULL(publisher->data, RMW_RET_INVALID_ARGUMENT);
+  auto * node = static_cast<rmw_node_t *>(publisher->data);
+  context = node->context->impl;
+  data = context->get_node_data(node)->get_pub_data(publisher);
+  return RMW_RET_OK;
+}
+
+rmw_ret_t get_loan_subscription(
+  const rmw_subscription_t * subscription, rmw_zenoh_cpp::SubscriptionData *& data)
+{
+  RMW_CHECK_ARGUMENT_FOR_NULL(subscription, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_TYPE_IDENTIFIERS_MATCH(
+    subscription, subscription->implementation_identifier, rmw_zenoh_cpp::rmw_zenoh_identifier,
+    return RMW_RET_INCORRECT_RMW_IMPLEMENTATION);
+  if (!subscription->can_loan_messages) {
+    RMW_SET_ERROR_MSG("subscription does not support loans");
+    return RMW_RET_UNSUPPORTED;
+  }
+  RMW_CHECK_ARGUMENT_FOR_NULL(subscription->data, RMW_RET_INVALID_ARGUMENT);
+  data = static_cast<rmw_zenoh_cpp::SubscriptionData *>(subscription->data);
+  return RMW_RET_OK;
+}
+
+rmw_ret_t take_loaned(
+  const rmw_subscription_t * subscription, void ** message, bool * taken, rmw_message_info_t * info)
+{
+  RMW_CHECK_ARGUMENT_FOR_NULL(message, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(taken, RMW_RET_INVALID_ARGUMENT);
+  *taken = false;
+  if (*message != nullptr) {
+    RMW_SET_ERROR_MSG("loaned message output must be null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  rmw_zenoh_cpp::SubscriptionData * data;
+  rmw_ret_t ret = get_loan_subscription(subscription, data);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
+  rmw_message_info_t local_info{};
+  auto * message_info = info ? info : &local_info;
+  ret = data->take_loaned_message(message, message_info, taken);
+  TRACETOOLS_TRACEPOINT(
+    rmw_take, static_cast<const void *>(subscription), *message,
+    message_info->source_timestamp, *taken);
+  return ret;
+}
+
 }  // namespace
 
 extern "C"
@@ -448,7 +507,8 @@ rmw_create_publisher(
   rmw_publisher->data = reinterpret_cast<void *>(const_cast<rmw_node_t *>(node));
   rmw_publisher->implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
   rmw_publisher->options = *publisher_options;
-  rmw_publisher->can_loan_messages = false;
+  rmw_publisher->can_loan_messages = node_data->get_pub_data(rmw_publisher)->configure_loaning(
+    type_supports, context_impl->shm().get());
   rmw_publisher->topic_name = rcutils_strdup(topic_name, *allocator);
   RMW_CHECK_FOR_NULL_WITH_MSG(
     rmw_publisher->topic_name,
@@ -566,10 +626,23 @@ rmw_borrow_loaned_message(
   const rosidl_message_type_support_t * type_support,
   void ** ros_message)
 {
-  static_cast<void>(publisher);
-  static_cast<void>(type_support);
-  static_cast<void>(ros_message);
-  return RMW_RET_UNSUPPORTED;
+  RMW_CHECK_ARGUMENT_FOR_NULL(type_support, RMW_RET_INVALID_ARGUMENT);
+  RMW_CHECK_ARGUMENT_FOR_NULL(ros_message, RMW_RET_INVALID_ARGUMENT);
+  if (*ros_message != nullptr) {
+    RMW_SET_ERROR_MSG("loaned message output must be null");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  rmw_zenoh_cpp::PublisherDataPtr data;
+  rmw_context_impl_s * context;
+  rmw_ret_t ret = get_loan_publisher(publisher, data, context);
+  if (ret != RMW_RET_OK) {
+    return ret;
+  }
+  auto * support = find_message_type_support(type_support);
+  if (!support) {
+    return RMW_RET_ERROR;
+  }
+  return data->borrow_loaned_message(support, ros_message, context->shm().get());
 }
 
 //==============================================================================
@@ -579,9 +652,11 @@ rmw_return_loaned_message_from_publisher(
   const rmw_publisher_t * publisher,
   void * loaned_message)
 {
-  static_cast<void>(publisher);
-  static_cast<void>(loaned_message);
-  return RMW_RET_UNSUPPORTED;
+  RMW_CHECK_ARGUMENT_FOR_NULL(loaned_message, RMW_RET_INVALID_ARGUMENT);
+  rmw_zenoh_cpp::PublisherDataPtr data;
+  rmw_context_impl_s * context;
+  rmw_ret_t ret = get_loan_publisher(publisher, data, context);
+  return ret == RMW_RET_OK ? data->return_loaned_message(loaned_message) : ret;
 }
 
 //==============================================================================
@@ -633,10 +708,12 @@ rmw_publish_loaned_message(
   void * ros_message,
   rmw_publisher_allocation_t * allocation)
 {
-  static_cast<void>(publisher);
-  static_cast<void>(ros_message);
   static_cast<void>(allocation);
-  return RMW_RET_UNSUPPORTED;
+  RMW_CHECK_ARGUMENT_FOR_NULL(ros_message, RMW_RET_INVALID_ARGUMENT);
+  rmw_zenoh_cpp::PublisherDataPtr data;
+  rmw_context_impl_s * context;
+  rmw_ret_t ret = get_loan_publisher(publisher, data, context);
+  return ret == RMW_RET_OK ? data->publish_loaned_message(ros_message) : ret;
 }
 
 //==============================================================================
@@ -1000,7 +1077,9 @@ rmw_create_subscription(
   rmw_subscription->data = static_cast<void *>(node_data->get_sub_data(rmw_subscription).get());
   rmw_subscription->implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
   rmw_subscription->options = *subscription_options;
-  rmw_subscription->can_loan_messages = false;
+  rmw_subscription->can_loan_messages =
+    node_data->get_sub_data(rmw_subscription)->configure_loaning(
+    type_supports, context_impl->shm().get());
   rmw_subscription->is_cft_enabled = false;
   rmw_subscription->topic_name = rcutils_strdup(topic_name, *allocator);
   RMW_CHECK_FOR_NULL_WITH_MSG(
@@ -1371,11 +1450,8 @@ rmw_take_loaned_message(
   bool * taken,
   rmw_subscription_allocation_t * allocation)
 {
-  static_cast<void>(subscription);
-  static_cast<void>(loaned_message);
-  static_cast<void>(taken);
   static_cast<void>(allocation);
-  return RMW_RET_UNSUPPORTED;
+  return take_loaned(subscription, loaned_message, taken, nullptr);
 }
 
 //==============================================================================
@@ -1388,12 +1464,9 @@ rmw_take_loaned_message_with_info(
   rmw_message_info_t * message_info,
   rmw_subscription_allocation_t * allocation)
 {
-  static_cast<void>(subscription);
-  static_cast<void>(loaned_message);
-  static_cast<void>(taken);
-  static_cast<void>(message_info);
   static_cast<void>(allocation);
-  return RMW_RET_UNSUPPORTED;
+  RMW_CHECK_ARGUMENT_FOR_NULL(message_info, RMW_RET_INVALID_ARGUMENT);
+  return take_loaned(subscription, loaned_message, taken, message_info);
 }
 
 //==============================================================================
@@ -1403,9 +1476,10 @@ rmw_return_loaned_message_from_subscription(
   const rmw_subscription_t * subscription,
   void * loaned_message)
 {
-  static_cast<void>(subscription);
-  static_cast<void>(loaned_message);
-  return RMW_RET_UNSUPPORTED;
+  RMW_CHECK_ARGUMENT_FOR_NULL(loaned_message, RMW_RET_INVALID_ARGUMENT);
+  rmw_zenoh_cpp::SubscriptionData * data;
+  rmw_ret_t ret = get_loan_subscription(subscription, data);
+  return ret == RMW_RET_OK ? data->return_loaned_message(loaned_message) : ret;
 }
 
 //==============================================================================

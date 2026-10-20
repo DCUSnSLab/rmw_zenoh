@@ -385,6 +385,100 @@ bool SubscriptionData::detach_condition_and_queue_is_empty()
   return message_queue_.empty();
 }
 
+bool SubscriptionData::configure_loaning(
+  const rosidl_message_type_support_t * typesupport, ShmContext * shm)
+{
+  if (!shm) {
+    return false;
+  }
+  auto type = LoanType::make(
+    typesupport, static_cast<const message_type_support_callbacks_t *>(type_support_impl_));
+  if (!type) {
+    return false;
+  }
+  auto provider = shm->get_loan_provider();
+  if (!provider || !loan_layout_fits(*type, *provider)) {
+    return false;
+  }
+  loan_type_ = std::move(type);
+  return true;
+}
+
+void SubscriptionData::fill_message_info(const Message & message, rmw_message_info_t * info)
+{
+  if (!info) {
+    return;
+  }
+  info->source_timestamp = message.attachment.source_timestamp();
+  info->received_timestamp = message.recv_timestamp;
+  info->publication_sequence_number = message.attachment.sequence_number();
+  info->reception_sequence_number = reception_sn_.fetch_add(1, std::memory_order_relaxed);
+  info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
+  memcpy(info->publisher_gid.data, message.attachment.copy_gid().data(), RMW_GID_STORAGE_SIZE);
+  info->from_intra_process = false;
+}
+
+rmw_ret_t SubscriptionData::take_loaned_message(
+  void ** message, rmw_message_info_t * info, bool * taken)
+{
+  *taken = false;
+  *message = nullptr;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!loan_type_) {
+    return RMW_RET_UNSUPPORTED;
+  }
+  if (is_shutdown_ || message_queue_.empty()) {
+    return RMW_RET_OK;
+  }
+  auto sample = std::move(message_queue_.front());
+  message_queue_.pop_front();
+  auto & payload = sample->payload;
+  const auto * header = payload.contiguous_data(0, 4);
+  const auto * body = payload.contiguous_data(4, loan_type_->size);
+  const uint16_t native = 1;
+  const bool native_encoding = header && header[0] == 0 &&
+    header[1] == *reinterpret_cast<const uint8_t *>(&native);
+  Loan loan;
+  if (native_encoding && body &&
+    reinterpret_cast<uintptr_t>(body) % loan_type_->alignment == 0)
+  {
+    *message = const_cast<uint8_t *>(body);
+  } else {
+    loan.buffer = LoanBuffer::allocate(*loan_type_, rmw_node_->context->options.allocator);
+    if (!loan.buffer) {
+      RMW_SET_ERROR_MSG("unable to allocate subscription loan");
+      return RMW_RET_BAD_ALLOC;
+    }
+    eprosima::fastcdr::FastBuffer buffer(
+      reinterpret_cast<char *>(const_cast<uint8_t *>(payload.data())), payload.size());
+    rmw_zenoh_cpp::Cdr deserializer(buffer);
+    if (!type_support_->deserialize_ros_message(
+        deserializer.get_cdr(), loan.buffer->data(), type_support_impl_))
+    {
+      RMW_SET_ERROR_MSG("could not deserialize loaned ROS message");
+      return RMW_RET_ERROR;
+    }
+    *message = loan.buffer->data();
+  }
+  fill_message_info(*sample, info);
+  loan.message = std::move(sample);
+  loans_.emplace(*message, std::move(loan));
+  *taken = true;
+  return RMW_RET_OK;
+}
+
+rmw_ret_t SubscriptionData::return_loaned_message(void * message)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto loan = loans_.find(message);
+  if (loan == loans_.end()) {
+    RMW_SET_ERROR_MSG("message is not a loan from this subscription");
+    return RMW_RET_INVALID_ARGUMENT;
+  }
+  loans_.erase(loan);
+  return RMW_RET_OK;
+}
+
 ///=============================================================================
 rmw_ret_t SubscriptionData::take_one_message(
   void * ros_message,
@@ -425,19 +519,7 @@ rmw_ret_t SubscriptionData::take_one_message(
     return RMW_RET_ERROR;
   }
 
-  if (message_info != nullptr) {
-    message_info->source_timestamp = msg_data->attachment.source_timestamp();
-    message_info->received_timestamp = msg_data->recv_timestamp;
-    message_info->publication_sequence_number = msg_data->attachment.sequence_number();
-    message_info->reception_sequence_number =
-      reception_sn_.fetch_add(1, std::memory_order_relaxed);
-    message_info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
-    memcpy(
-      message_info->publisher_gid.data,
-      msg_data->attachment.copy_gid().data(),
-      RMW_GID_STORAGE_SIZE);
-    message_info->from_intra_process = false;
-  }
+  fill_message_info(*msg_data, message_info);
   *taken = true;
 
   return RMW_RET_OK;
@@ -482,19 +564,7 @@ rmw_ret_t SubscriptionData::take_serialized_message(
 
   *taken = true;
 
-  if (message_info != nullptr) {
-    message_info->source_timestamp = msg_data->attachment.source_timestamp();
-    message_info->received_timestamp = msg_data->recv_timestamp;
-    message_info->publication_sequence_number = msg_data->attachment.sequence_number();
-    message_info->reception_sequence_number =
-      reception_sn_.fetch_add(1, std::memory_order_relaxed);
-    message_info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
-    memcpy(
-      message_info->publisher_gid.data,
-      msg_data->attachment.copy_gid().data(),
-      RMW_GID_STORAGE_SIZE);
-    message_info->from_intra_process = false;
-  }
+  fill_message_info(*msg_data, message_info);
 
   return RMW_RET_OK;
 }
