@@ -129,6 +129,11 @@ std::optional<zenoh::SharedShmProvider> ShmContext::get_shm_provider(zenoh::Sess
 }
 
 
+size_t ShmContext::pool_size() const
+{
+  return pool_size_;
+}
+
 std::shared_ptr<zenoh::PosixShmProvider> ShmContext::get_loan_provider()
 {
   std::lock_guard<std::mutex> lock(loan_mutex_);

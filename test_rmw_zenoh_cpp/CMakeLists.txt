@@ -42,14 +42,15 @@ if(BUILD_TESTING)
     ${sensor_msgs_TARGETS})
   ament_add_gtest_test(test_loans
     ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp ROS_DISABLE_LOANED_MESSAGES=0
-      ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=true GTEST_FILTER=TestLoans.*)
+      ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=true
+      GTEST_FILTER=TestLoans.*:TestLoanPool.*)
   ament_add_gtest_test(test_loans TEST_NAME test_loans_disabled
     ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp ROS_DISABLE_LOANED_MESSAGES=0
       ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=false GTEST_FILTER=TestNoLoans.*)
   ament_add_gtest_test(test_loans TEST_NAME test_loans_undersized
     ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp ROS_DISABLE_LOANED_MESSAGES=0
       ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=true
-      ZENOH_SHM_ALLOC_SIZE=1048576 GTEST_FILTER=TestNoLoans.*)
+      ZENOH_SHM_ALLOC_SIZE=1048576 GTEST_FILTER=TestSmallPool.*)
 
   ament_lint_auto_find_test_dependencies()
 

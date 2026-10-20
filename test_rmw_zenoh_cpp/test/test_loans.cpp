@@ -18,7 +18,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -36,6 +38,30 @@
 using Plain = test_rmw_zenoh_cpp::msg::PlainPayload;
 using Nested = test_rmw_zenoh_cpp::msg::NestedPayload;
 using Padded = test_rmw_zenoh_cpp::msg::PaddedPayload;
+
+void * take_loan(const rmw_subscription_t * subscription, rmw_message_info_t * info = nullptr)
+{
+  void * message = nullptr;
+  bool taken = false;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  do {
+    auto ret = info ? rmw_take_loaned_message_with_info(
+      subscription, &message, &taken, info, nullptr) :
+      rmw_take_loaned_message(subscription, &message, &taken, nullptr);
+    EXPECT_EQ(RMW_RET_OK, ret);
+    if (taken) {
+      return message;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  ADD_FAILURE() << "loaned take timed out";
+  return nullptr;
+}
+
+const rmw_subscription_t * handle(const rclcpp::SubscriptionBase & subscription)
+{
+  return rcl_subscription_get_rmw_handle(subscription.get_subscription_handle().get());
+}
 
 class TestLoans : public ::testing::Test
 {
@@ -76,21 +102,7 @@ protected:
 
   void * take(rmw_message_info_t * info = nullptr)
   {
-    void * message = nullptr;
-    bool taken = false;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    do {
-      auto ret = info ? rmw_take_loaned_message_with_info(
-        subscription(), &message, &taken, info, nullptr) :
-        rmw_take_loaned_message(subscription(), &message, &taken, nullptr);
-      EXPECT_EQ(RMW_RET_OK, ret);
-      if (taken) {
-        return message;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    } while (std::chrono::steady_clock::now() < deadline);
-    ADD_FAILURE() << "loaned take timed out";
-    return nullptr;
+    return take_loan(subscription(), info);
   }
 
   rclcpp::Node::SharedPtr node;
@@ -342,3 +354,55 @@ TEST_F(TestNoLoans, capability_and_fallback)
   }
   rclcpp::shutdown();
 }
+
+TEST(TestSmallPool, publisher_falls_back)
+{
+  rclcpp::init(0, nullptr);
+  {
+    auto node = std::make_shared<rclcpp::Node>("test_small_pool");
+    auto pub = node->create_publisher<Plain>("small_pool", 5);
+    auto sub = node->create_subscription<Plain>("small_pool", 5, [](const Plain &) {});
+    EXPECT_FALSE(pub->can_loan_messages());
+    ASSERT_TRUE(sub->can_loan_messages());
+    auto message = pub->borrow_loaned_message();
+    message.get().stamp = 5;
+    message.get().data.fill(6);
+    pub->publish(std::move(message));
+    void * received = take_loan(handle(*sub));
+    ASSERT_NE(nullptr, received);
+    EXPECT_EQ(5, static_cast<Plain *>(received)->stamp);
+    EXPECT_EQ(6, static_cast<Plain *>(received)->data.back());
+    EXPECT_EQ(RMW_RET_OK, rmw_return_loaned_message_from_subscription(handle(*sub), received));
+  }
+  rclcpp::shutdown();
+}
+
+#ifdef __linux__
+size_t locked_kilobytes()
+{
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.rfind("VmLck:", 0) == 0) {
+      return std::stoul(line.substr(6));
+    }
+  }
+  ADD_FAILURE() << "no VmLck in /proc/self/status";
+  return 0;
+}
+
+TEST(TestLoanPool, entities_do_not_reserve_the_pool)
+{
+  rclcpp::init(0, nullptr);
+  {
+    auto node = std::make_shared<rclcpp::Node>("test_loan_pool");
+    const size_t before = locked_kilobytes();
+    auto pub = node->create_publisher<Plain>("loan_pool", 5);
+    auto sub = node->create_subscription<Plain>("loan_pool", 5, [](const Plain &) {});
+    EXPECT_TRUE(pub->can_loan_messages());
+    EXPECT_TRUE(sub->can_loan_messages());
+    EXPECT_EQ(before, locked_kilobytes());
+  }
+  rclcpp::shutdown();
+}
+#endif

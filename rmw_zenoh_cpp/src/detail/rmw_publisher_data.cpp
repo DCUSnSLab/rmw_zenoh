@@ -215,11 +215,7 @@ bool PublisherData::configure_loaning(
   }
   auto type = LoanType::make(
     typesupport, static_cast<const message_type_support_callbacks_t *>(type_support_impl_));
-  if (!type) {
-    return false;
-  }
-  auto provider = shm->get_loan_provider();
-  if (!provider || !loan_layout_fits(*type, *provider)) {
+  if (!type || type->size > shm->pool_size()) {
     return false;
   }
   loan_type_ = std::move(type);

@@ -105,6 +105,9 @@ struct ShmContext
 
   std::optional<zenoh::SharedShmProvider> get_shm_provider(zenoh::Session & session);
 
+  size_t pool_size() const;
+
+  // Created on first use: zenoh locks the whole pool in memory.
   std::shared_ptr<zenoh::PosixShmProvider> get_loan_provider();
 
 private:

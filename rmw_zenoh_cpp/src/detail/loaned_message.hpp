@@ -62,8 +62,6 @@ private:
   uint8_t * data_;
   std::optional<zenoh::Bytes> payload_;
 };
-
-bool loan_layout_fits(const LoanType & type, const zenoh::ShmProvider & provider);
 }  // namespace rmw_zenoh_cpp
 
 #endif  // DETAIL__LOANED_MESSAGE_HPP_

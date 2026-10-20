@@ -396,10 +396,6 @@ bool SubscriptionData::configure_loaning(
   if (!type) {
     return false;
   }
-  auto provider = shm->get_loan_provider();
-  if (!provider || !loan_layout_fits(*type, *provider)) {
-    return false;
-  }
   loan_type_ = std::move(type);
   return true;
 }

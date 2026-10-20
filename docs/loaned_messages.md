@@ -6,6 +6,8 @@ use `rclcpp::Publisher::borrow_loaned_message()` without application changes.
 Subscriptions must enable loans with `ROS_DISABLE_LOANED_MESSAGES=0`. The current
 Jazzy rclcpp executor returns subscription loans immediately after the callback;
 use a `const Message &` callback and do not retain references beyond the callback.
+A taken loan points into memory shared with the publisher and with every other
+subscriber of the same sample, in this and other processes. Do not modify it.
 rclcpp disables middleware loans for publishers using intra-process communication
 and uses its existing allocator and intra-process path instead.
 
@@ -59,11 +61,12 @@ wrong-owner returns, and duplicate returns are rejected. Destroying an entity
 reclaims outstanding loans; applications must return their loans before destroying
 the corresponding entity.
 
-With SHM disabled, initialization failure, or a message too large for the pool,
-`can_loan_messages` is false and direct RMW loan operations return unsupported.
-rclcpp then uses its existing allocator fallback. If a capable publisher's pool
-is temporarily exhausted by outstanding loans, borrowing falls back to an owned
-heap buffer. This preserves the loan API and wire format but does not promise
+With SHM disabled `can_loan_messages` is false for publishers and subscriptions,
+and a publisher of a message larger than the pool cannot loan either. Direct RMW
+loan operations then return unsupported and rclcpp uses its existing allocator
+fallback. If the loan pool cannot be created, or a capable publisher's pool is
+temporarily exhausted by outstanding loans, borrowing falls back to an owned heap
+buffer. This preserves the loan API and wire format but does not promise
 zero copies through a transport in that case. Allocation failure of both SHM and
 heap returns `RMW_RET_BAD_ALLOC`.
 
@@ -73,16 +76,16 @@ heap returns `RMW_RET_BAD_ALLOC`.
 4 MiB byte array. Its loan tests cover pointer identity, defaults, outstanding
 loans, return errors, mixed takes, C type support, nested layouts, padding rejection,
 opposite-endian CDR, serialized takes, transient-local history, pool exhaustion,
-and SHM disabled or undersized.
+a pool that is not reserved by entity creation, and SHM disabled or undersized.
 
 The build also provides `loan_benchmark`. Use separate publisher and subscriber
 processes for transport measurements:
 
 ```sh
-export RMW_IMPLEMENTATION=rmw_zenoh_cpp ROS_DOMAIN_ID=171
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 export ROS_DISABLE_LOANED_MESSAGES=0
-export ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/localhost:7480"];transport/shared_memory/enabled=true'
-# Start rmw_zenohd listening on tcp/localhost:7480 separately.
+export ZENOH_CONFIG_OVERRIDE='transport/shared_memory/enabled=true'
+# Start rmw_zenohd separately.
 ./build/test_rmw_zenoh_cpp/loan_benchmark plain sub
 ./build/test_rmw_zenoh_cpp/loan_benchmark plain pub
 ```

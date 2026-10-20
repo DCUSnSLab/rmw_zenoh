@@ -162,12 +162,6 @@ std::unique_ptr<LoanType> LoanType::make(
   return type;
 }
 
-bool loan_layout_fits(const LoanType & type, const zenoh::ShmProvider & provider)
-{
-  auto allocation = provider.alloc_gc_defrag(type.size, shm_alignment(type.alignment));
-  return std::holds_alternative<zenoh::ZShmMut>(allocation);
-}
-
 LoanBuffer::LoanBuffer(const LoanType & type, rcutils_allocator_t allocator)
 : type_(type), allocator_(allocator), data_(nullptr)
 {}
