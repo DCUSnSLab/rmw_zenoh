@@ -367,7 +367,7 @@ bool SubscriptionData::queue_has_data_and_attach_condition_if_not(
   rmw_wait_set_data_t * wait_set_data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!message_queue_.empty()) {
+  if (!message_queue_.empty() || (ipc_ready_ && ipc_ready_(ipc_user_))) {
     return true;
   }
 
@@ -382,7 +382,7 @@ bool SubscriptionData::detach_condition_and_queue_is_empty()
   std::lock_guard<std::mutex> lock(mutex_);
   wait_set_data_ = nullptr;
 
-  return message_queue_.empty();
+  return message_queue_.empty() && !(ipc_ready_ && ipc_ready_(ipc_user_));
 }
 
 bool SubscriptionData::configure_loaning(
@@ -575,9 +575,32 @@ rmw_ret_t SubscriptionData::take_serialized_message(
 void SubscriptionData::add_new_message(
   std::unique_ptr<SubscriptionData::Message> msg, const std::string & topic_name)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
   if (is_shutdown_) {
     return;
+  }
+  if (std::find(msg->attachment.ipc_excluded.begin(), msg->attachment.ipc_excluded.end(),
+    entity_->copy_gid()) != msg->attachment.ipc_excluded.end()) {return;}
+  if (ipc_ingress_) {
+    struct Decode {SubscriptionData * sub; const Payload * payload;} decode{this, &msg->payload};
+    auto convert = [](void * value, void * output) {
+        auto state = static_cast<Decode *>(value);
+        return state->sub->deserialize(*state->payload, output);
+      };
+    rmw_message_info_t info = rmw_get_zero_initialized_message_info();
+    fill_message_info(*msg, &info);
+    auto result = ipc_ingress_(ipc_user_, &decode, convert, &info);
+    if (result.status) {
+      if (result.status == 2) {data_callback_mgr_.trigger_callback();}
+      if (result.status == 2 && wait_set_data_) {
+        std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
+        wait_set_data_->triggered = true;
+        wait_set_data_->condition_variable.notify_one();
+      }
+      lock.unlock();
+      if (result.release) {result.release(result.retired);}
+      return;
+    }
   }
   const rmw_qos_profile_t adapted_qos_profile = entity_->topic_info().value().qos_;
   if (adapted_qos_profile.history != RMW_QOS_POLICY_HISTORY_KEEP_ALL &&
@@ -648,4 +671,51 @@ std::shared_ptr<GraphCache> SubscriptionData::graph_cache() const
   return graph_cache_;
 }
 
+}  // namespace rmw_zenoh_cpp
+
+namespace rmw_zenoh_cpp
+{
+void SubscriptionData::ipc_configure(
+  rmw_ipc_ready_fn ready, rmw_ipc_ingress_fn ingress,
+  void * user, uint8_t * gid)
+{
+  std::unique_lock<std::mutex> lock(mutex_);
+  ipc_ready_ = ready;
+  ipc_ingress_ = ingress;
+  ipc_user_ = user;
+  while (ipc_ingress_ && !message_queue_.empty()) {
+    auto message = std::move(message_queue_.front());
+    message_queue_.pop_front();
+    struct Decode {SubscriptionData * sub; const Payload * payload;
+    } decode{this, &message->payload};
+    auto convert = [](void * value, void * output) {
+        auto state = static_cast<Decode *>(value);
+        return state->sub->deserialize(*state->payload, output);
+      };
+    rmw_message_info_t info = rmw_get_zero_initialized_message_info();
+    fill_message_info(*message, &info);
+    auto result = ipc_ingress_(user, &decode, convert, &info);
+    if (!result.status) {
+      message_queue_.push_front(std::move(message));
+      break;
+    }
+    lock.unlock();
+    if (result.release) {result.release(result.retired);}
+    lock.lock();
+  }
+  if (gid) {
+    auto id = entity_->copy_gid();
+    std::copy(id.begin(), id.end(), gid);
+  }
+}
+void SubscriptionData::ipc_notify()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_callback_mgr_.trigger_callback();
+  if (wait_set_data_) {
+    std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
+    wait_set_data_->triggered = true;
+    wait_set_data_->condition_variable.notify_one();
+  }
+}
 }  // namespace rmw_zenoh_cpp

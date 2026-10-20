@@ -17,6 +17,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include <zenoh.hxx>
 
@@ -40,6 +41,7 @@ public:
   int64_t source_timestamp() const;
   std::array<uint8_t, RMW_GID_STORAGE_SIZE> copy_gid() const;
 
+  std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> ipc_excluded;
   zenoh::Bytes serialize_to_zbytes();
 
 private:

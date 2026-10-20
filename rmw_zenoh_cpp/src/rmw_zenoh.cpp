@@ -2803,3 +2803,32 @@ rmw_zenoh_get_session(const rmw_context_t * context)
     context->impl);
   return context_impl->session();
 }
+
+namespace
+{
+rmw_ret_t ipc_publish(
+  const rmw_publisher_t * pub, const void * message,
+  rmw_ipc_prepare_fn prepare, void * user)
+{
+  auto node = static_cast<rmw_node_t *>(pub->data);
+  auto context = node->context->impl;
+  auto data = context->get_node_data(node)->get_pub_data(pub);
+  return data->publish(message, context->shm().get(), prepare, user);
+}
+void ipc_configure(
+  const rmw_subscription_t * sub, rmw_ipc_ready_fn ready,
+  rmw_ipc_ingress_fn ingress, void * user, uint8_t * gid)
+{
+  static_cast<rmw_zenoh_cpp::SubscriptionData *>(sub->data)->ipc_configure(ready, ingress, user,
+      gid);
+}
+void ipc_notify(const rmw_subscription_t * sub)
+{
+  static_cast<rmw_zenoh_cpp::SubscriptionData *>(sub->data)->ipc_notify();
+}
+}  // namespace
+extern "C" RMW_PUBLIC const rmw_ipc_api_t * rmw_get_intra_process_api_v1()
+{
+  static const rmw_ipc_api_t api{sizeof(rmw_ipc_api_t), 1, ipc_publish, ipc_configure, ipc_notify};
+  return &api;
+}

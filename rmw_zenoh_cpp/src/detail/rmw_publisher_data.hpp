@@ -36,6 +36,7 @@
 #include "rcutils/allocator.h"
 
 #include "rmw/rmw.h"
+#include "rmw/intra_process.h"
 #include "rmw/ret_types.h"
 
 namespace rmw_zenoh_cpp
@@ -66,10 +67,9 @@ public:
   rmw_ret_t publish_loaned_message(void * message);
 
   // Publish a ROS message.
+  rmw_ret_t publish(const void * ros_message, ShmContext * shm);
   rmw_ret_t publish(
-    const void *ros_message,
-    ShmContext *shm
-  );
+    const void * ros_message, ShmContext * shm, rmw_ipc_prepare_fn prepare, void * user);
 
   // Publish a serialized ROS message.
   rmw_ret_t publish_serialized_message(

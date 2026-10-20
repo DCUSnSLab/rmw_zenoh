@@ -41,6 +41,7 @@
 #include "rcutils/allocator.h"
 
 #include "rmw/rmw.h"
+#include "rmw/intra_process.h"
 #include "rmw/ret_types.h"
 
 namespace rmw_zenoh_cpp
@@ -94,6 +95,10 @@ public:
   // Check if this SubscriptionData is shutdown.
   bool is_shutdown() const;
 
+  void ipc_configure(
+    rmw_ipc_ready_fn ready, rmw_ipc_ingress_fn ingress, void * user,
+    uint8_t * gid);
+  void ipc_notify();
   // Add a new message to the queue.
   void add_new_message(std::unique_ptr<Message> msg, const std::string & topic_name);
 
@@ -149,6 +154,9 @@ private:
   };
 
 
+  rmw_ipc_ingress_fn ipc_ingress_ = nullptr;
+  rmw_ipc_ready_fn ipc_ready_ = nullptr;
+  void * ipc_user_ = nullptr;
   // Internal mutex.
   mutable std::mutex mutex_;
   // The parent node.
