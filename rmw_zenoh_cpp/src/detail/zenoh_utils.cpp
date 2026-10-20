@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -74,12 +75,24 @@ int64_t get_system_time_in_ns()
 
 ///=============================================================================
 Payload::Payload(const zenoh::Bytes & bytes)
-: bytes_(bytes.clone())
-{}
+{
+  // A loaning publisher sends the CDR header and the aligned body as two slices. Keep those so
+  // that the body is read in place; flatten anything else once, on the receiving thread.
+  auto slices = bytes.slice_iter();
+  auto first = slices.next();
+  if (first && slices.next() && (first->len != 4 || slices.next())) {
+    flat_ = bytes.as_vector();
+  } else {
+    bytes_ = bytes.clone();
+  }
+}
 
 ///=============================================================================
 const uint8_t * Payload::contiguous_data(size_t offset, size_t length) const
 {
+  if (flat_) {
+    return offset + length <= flat_->size() ? flat_->data() + offset : nullptr;
+  }
   auto slices = bytes_.slice_iter();
   while (auto slice = slices.next()) {
     if (offset < slice->len) {
@@ -93,25 +106,33 @@ const uint8_t * Payload::contiguous_data(size_t offset, size_t length) const
 ///=============================================================================
 const uint8_t * Payload::data() const
 {
-  if (const auto * data = contiguous_data(0, size())) {
-    return data;
-  }
-  if (!contiguous_) {
-    contiguous_ = bytes_.as_vector();
-  }
-  return contiguous_->data();
+  return contiguous_data(0, size());
 }
 
 ///=============================================================================
 size_t Payload::size() const
 {
-  return bytes_.size();
+  return flat_ ? flat_->size() : bytes_.size();
 }
 
 ///=============================================================================
 bool Payload::empty() const
 {
-  return bytes_.size() == 0;
+  return size() == 0;
+}
+
+///=============================================================================
+void Payload::copy_to(uint8_t * destination) const
+{
+  if (flat_) {
+    memcpy(destination, flat_->data(), flat_->size());
+    return;
+  }
+  auto slices = bytes_.slice_iter();
+  while (auto slice = slices.next()) {
+    memcpy(destination, slice->data, slice->len);
+    destination += slice->len;
+  }
 }
 
 ///=============================================================================

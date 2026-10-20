@@ -24,7 +24,9 @@ namespace rmw_zenoh_cpp
 class Cdr final
 {
 public:
-  explicit Cdr(eprosima::fastcdr::FastBuffer & fastbuffer);
+  explicit Cdr(
+    eprosima::fastcdr::FastBuffer & fastbuffer,
+    eprosima::fastcdr::Cdr::Endianness endianness = eprosima::fastcdr::Cdr::DEFAULT_ENDIAN);
 
   eprosima::fastcdr::Cdr & get_cdr();
 

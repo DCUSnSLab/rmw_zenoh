@@ -414,6 +414,33 @@ void SubscriptionData::fill_message_info(const Message & message, rmw_message_in
   info->from_intra_process = false;
 }
 
+bool SubscriptionData::deserialize(const Payload & payload, void * ros_message)
+{
+  const uint8_t * header = payload.contiguous_data(0, 4);
+  const uint8_t * data = payload.data();
+  if (data) {
+    eprosima::fastcdr::FastBuffer buffer(
+      reinterpret_cast<char *>(const_cast<uint8_t *>(data)), payload.size());
+    rmw_zenoh_cpp::Cdr deser(buffer);
+    if (type_support_->deserialize_ros_message(deser.get_cdr(), ros_message, type_support_impl_)) {
+      return true;
+    }
+  } else if (header && header[0] == 0 && header[1] <= 1) {
+    const uint8_t * body = payload.contiguous_data(4, payload.size() - 4);
+    eprosima::fastcdr::FastBuffer buffer(
+      reinterpret_cast<char *>(const_cast<uint8_t *>(body)), payload.size() - 4);
+    rmw_zenoh_cpp::Cdr deser(buffer, static_cast<eprosima::fastcdr::Cdr::Endianness>(header[1]));
+    if (type_support_->deserialize_ros_message_body(
+        deser.get_cdr(), ros_message, type_support_impl_))
+    {
+      return true;
+    }
+  }
+  RMW_SET_ERROR_MSG("could not deserialize ROS message");
+  return false;
+}
+
+///=============================================================================
 rmw_ret_t SubscriptionData::take_loaned_message(
   void ** message, rmw_message_info_t * info, bool * taken)
 {
@@ -445,13 +472,7 @@ rmw_ret_t SubscriptionData::take_loaned_message(
       RMW_SET_ERROR_MSG("unable to allocate subscription loan");
       return RMW_RET_BAD_ALLOC;
     }
-    eprosima::fastcdr::FastBuffer buffer(
-      reinterpret_cast<char *>(const_cast<uint8_t *>(payload.data())), payload.size());
-    rmw_zenoh_cpp::Cdr deserializer(buffer);
-    if (!type_support_->deserialize_ros_message(
-        deserializer.get_cdr(), loan.buffer->data(), type_support_impl_))
-    {
-      RMW_SET_ERROR_MSG("could not deserialize loaned ROS message");
+    if (!deserialize(payload, loan.buffer->data())) {
       return RMW_RET_ERROR;
     }
     *message = loan.buffer->data();
@@ -499,19 +520,7 @@ rmw_ret_t SubscriptionData::take_one_message(
       "SubscriptionData not able to get slice data");
     return RMW_RET_ERROR;
   }
-  // Object that manages the raw buffer
-  eprosima::fastcdr::FastBuffer fastbuffer(
-    reinterpret_cast<char *>(const_cast<uint8_t *>(payload_data.data())),
-    payload_data.size());
-
-  // Object that serializes the data
-  rmw_zenoh_cpp::Cdr deser(fastbuffer);
-  if (!type_support_->deserialize_ros_message(
-      deser.get_cdr(),
-      ros_message,
-      type_support_impl_))
-  {
-    RMW_SET_ERROR_MSG("could not deserialize ROS message");
+  if (!deserialize(payload_data, ros_message)) {
     return RMW_RET_ERROR;
   }
 
@@ -553,10 +562,7 @@ rmw_ret_t SubscriptionData::take_serialized_message(
     }
   }
   serialized_message->buffer_length = payload_data.size();
-  memcpy(
-    serialized_message->buffer,
-    reinterpret_cast<char *>(const_cast<uint8_t *>(payload_data.data())),
-    payload_data.size());
+  payload_data.copy_to(serialized_message->buffer);
 
   *taken = true;
 

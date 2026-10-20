@@ -83,6 +83,7 @@ public:
 
   ~Payload() = default;
 
+  // Null when the payload is a CDR header and body in separate slices.
   const uint8_t * data() const;
 
   size_t size() const;
@@ -91,9 +92,11 @@ public:
 
   const uint8_t * contiguous_data(size_t offset, size_t length) const;
 
+  void copy_to(uint8_t * destination) const;
+
 private:
   zenoh::Bytes bytes_;
-  mutable std::optional<std::vector<uint8_t>> contiguous_;
+  std::optional<std::vector<uint8_t>> flat_;
 };
 
 ///=============================================================================

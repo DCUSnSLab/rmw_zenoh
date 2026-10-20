@@ -140,6 +140,8 @@ private:
 
   void fill_message_info(const Message & message, rmw_message_info_t * info);
 
+  bool deserialize(const Payload & payload, void * ros_message);
+
   struct Loan
   {
     std::unique_ptr<Message> message;

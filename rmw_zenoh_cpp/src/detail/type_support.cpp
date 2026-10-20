@@ -120,7 +120,22 @@ bool TypeSupport::deserialize_ros_message(
   try {
     // Deserialize encapsulation.
     deser.read_encapsulation();
+  } catch (const eprosima::fastcdr::exception::Exception & e) {
+    RMW_SET_ERROR_MSG_WITH_FORMAT_STRING(
+      "Fast CDR exception deserializing message of type %s. %s",
+      get_name(), e.what());
+    return false;
+  }
+  return deserialize_ros_message_body(deser, ros_message, impl);
+}
 
+///=============================================================================
+bool TypeSupport::deserialize_ros_message_body(
+  eprosima::fastcdr::Cdr & deser,
+  void * ros_message,
+  const void * impl) const
+{
+  try {
     // If type is not empty, deserialize message
     if (has_data_) {
       auto callbacks = static_cast<const message_type_support_callbacks_t *>(impl);

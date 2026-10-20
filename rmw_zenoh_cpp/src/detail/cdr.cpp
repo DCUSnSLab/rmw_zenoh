@@ -20,11 +20,13 @@
 
 namespace rmw_zenoh_cpp
 {
-Cdr::Cdr(eprosima::fastcdr::FastBuffer & fastbuffer)
+Cdr::Cdr(
+  eprosima::fastcdr::FastBuffer & fastbuffer,
+  eprosima::fastcdr::Cdr::Endianness endianness)
 #if FASTCDR_VERSION_MAJOR == 1
-: cdr_(fastbuffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::Cdr::DDS_CDR)
+: cdr_(fastbuffer, endianness, eprosima::fastcdr::Cdr::DDS_CDR)
 #else
-: cdr_(fastbuffer, eprosima::fastcdr::Cdr::DEFAULT_ENDIAN, eprosima::fastcdr::CdrVersion::DDS_CDR)
+: cdr_(fastbuffer, endianness, eprosima::fastcdr::CdrVersion::DDS_CDR)
 #endif
 {
 }

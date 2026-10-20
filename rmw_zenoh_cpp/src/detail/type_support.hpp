@@ -60,6 +60,10 @@ public:
   bool deserialize_ros_message(
     eprosima::fastcdr::Cdr & deser, void * ros_message, const void * impl) const;
 
+  // For a CDR body whose encapsulation header was read separately.
+  bool deserialize_ros_message_body(
+    eprosima::fastcdr::Cdr & deser, void * ros_message, const void * impl) const;
+
   virtual ~TypeSupport() {}
 
 protected:

@@ -34,17 +34,21 @@ different native byte order deserializes into an owned loan buffer.
 The header and body are separate Zenoh byte slices. Placing an eight-byte-aligned
 ROS struct immediately after a four-byte header in an aligned allocation would
 misalign the struct. The body therefore uses an aligned Zenoh SHM allocation and
-the header uses a separate small allocation. The receiving payload retains its
-slices and only flattens them when a consumer needs a contiguous serialized buffer.
-A loaning subscription takes a direct view of the body when its byte order and
-alignment permit; otherwise it deserializes into an aligned owned buffer.
+the header uses a separate small allocation. A receiver keeps a payload made of
+exactly these two slices as is and flattens any other multi-slice payload on
+arrival, as before. A loaning subscription takes a direct view of the body when
+its byte order and alignment permit; otherwise it deserializes into an aligned
+owned buffer. Regular takes deserialize the body slice in place, and serialized
+takes copy both slices once.
 
 The Zenoh transport provider supports byte-aligned allocations. Each context
-lazily creates an additional POSIX Zenoh SHM provider with eight-byte alignment for
-ROS loans. Its capacity uses the configured transport SHM pool size
-(`ZENOH_SHM_ALLOC_SIZE` or `transport/shared_memory/transport_optimization/pool_size`).
-This can reserve one additional pool per context; the transport pool is unchanged.
-The transport message-size threshold does not restrict explicit message loans.
+creates an additional POSIX Zenoh SHM provider with eight-byte alignment for ROS
+loans on the first publisher borrow. Zenoh locks the whole pool in memory, so
+creating loan-capable publishers and subscriptions does not create it. Its capacity
+uses the configured transport SHM pool size (`ZENOH_SHM_ALLOC_SIZE` or
+`transport/shared_memory/transport_optimization/pool_size`). A process that borrows
+holds one additional pool; the transport pool is unchanged. The transport
+message-size threshold does not restrict explicit message loans.
 
 ## Ownership and allocation limits
 
