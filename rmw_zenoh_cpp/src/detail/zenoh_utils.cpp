@@ -74,6 +74,18 @@ int64_t get_system_time_in_ns()
 }
 
 ///=============================================================================
+std::vector<uint8_t> flatten(const zenoh::Bytes & bytes)
+{
+  std::vector<uint8_t> flat;
+  flat.reserve(bytes.size());
+  auto slices = bytes.slice_iter();
+  while (auto slice = slices.next()) {
+    flat.insert(flat.end(), slice->data, slice->data + slice->len);
+  }
+  return flat;
+}
+
+///=============================================================================
 Payload::Payload(const zenoh::Bytes & bytes)
 {
   // A loaning publisher sends the CDR header and the aligned body as two slices. Keep those so
@@ -81,7 +93,7 @@ Payload::Payload(const zenoh::Bytes & bytes)
   auto slices = bytes.slice_iter();
   auto first = slices.next();
   if (first && slices.next() && (first->len != 4 || slices.next())) {
-    flat_ = bytes.as_vector();
+    flat_ = flatten(bytes);
   } else {
     bytes_ = bytes.clone();
   }

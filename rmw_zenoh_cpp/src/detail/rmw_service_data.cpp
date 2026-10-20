@@ -293,7 +293,7 @@ rmw_ret_t ServiceData::take_request(
     return RMW_RET_ERROR;
   }
 
-  auto payload_data = payload.value().get().as_vector();
+  auto payload_data = flatten(payload.value().get());
 
   if (payload_data.empty()) {
     RMW_ZENOH_LOG_DEBUG_NAMED(

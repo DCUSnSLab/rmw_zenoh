@@ -281,7 +281,7 @@ rmw_ret_t ClientData::take_response(
   const zenoh::Sample & sample = reply.get_ok();
 
   // Object that manages the raw buffer
-  std::vector<uint8_t> payload = sample.get_payload().as_vector();
+  std::vector<uint8_t> payload = flatten(sample.get_payload());
   if (payload.size() == 0) {
     RMW_ZENOH_LOG_DEBUG_NAMED(
       "rmw_zenoh_cpp",

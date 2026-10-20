@@ -76,6 +76,10 @@ private:
 int64_t get_system_time_in_ns();
 
 ///=============================================================================
+// Same bytes as zenoh::Bytes::as_vector(), which zero-fills the vector before copying into it.
+std::vector<uint8_t> flatten(const zenoh::Bytes & bytes);
+
+///=============================================================================
 class Payload
 {
 public:
