@@ -126,6 +126,8 @@ public:
     bool no_demangle,
     rmw_names_and_types_t * topic_names_and_types) const;
 
+  std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> ipc_matched_services(
+    const liveliness::TopicInfo & info);
   std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> ipc_matched_subscriptions(
     const liveliness::TopicInfo & info);
   rmw_ret_t publisher_count_matched_subscriptions(

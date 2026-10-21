@@ -1299,6 +1299,27 @@ void GraphCache::update_event_counters(
 
 namespace rmw_zenoh_cpp
 {
+std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> GraphCache::ipc_matched_services(
+  const liveliness::TopicInfo & info)
+{
+  std::lock_guard<std::mutex> lock(graph_mutex_);
+  std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> result;
+  auto topic = graph_services_.find(info.name_);
+  if (topic == graph_services_.end()) {return result;}
+  auto type = topic->second.find(info.type_);
+  if (type == topic->second.end()) {return result;}
+  for (const auto & entry : type->second) {
+    rmw_qos_compatibility_type_t compatible;
+    auto ret = rmw_qos_profile_check_compatible(info.qos_, entry.second->info_.qos_,
+      &compatible, nullptr, 0);
+    if (ret == RMW_RET_OK && compatible != RMW_QOS_COMPATIBILITY_ERROR) {
+      for (const auto & sub : entry.second->subs_) {
+        result.push_back(sub->copy_gid());
+      }
+    }
+  }
+  return result;
+}
 std::vector<std::array<uint8_t, RMW_GID_STORAGE_SIZE>> GraphCache::ipc_matched_subscriptions(
   const liveliness::TopicInfo & info)
 {

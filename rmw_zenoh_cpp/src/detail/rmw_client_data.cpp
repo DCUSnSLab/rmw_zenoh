@@ -16,6 +16,7 @@
 
 #include <fastcdr/FastBuffer.h>
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <limits>
@@ -338,6 +339,12 @@ rmw_ret_t ClientData::send_request(
   const void * ros_request,
   int64_t * sequence_id)
 {
+  return send_request_ipc(ros_request, sequence_id, nullptr, nullptr);
+}
+
+rmw_ret_t ClientData::send_request_ipc(
+  const void * ros_request, int64_t * sequence_id, rmw_ipc_request_fn prepare, void * user)
+{
   std::unique_lock<std::mutex> lock(mutex_);
   if (this->is_shutdown()) {
     return RMW_RET_OK;
@@ -347,6 +354,21 @@ rmw_ret_t ClientData::send_request(
   rmw_context_impl_s * context_impl = static_cast<rmw_context_impl_s *>(rmw_node_->context->impl);
   if (context_impl == nullptr) {
     return RMW_RET_INVALID_ARGUMENT;
+  }
+
+  *sequence_id = sequence_number_++;
+  if (prepare) {
+    auto matched = context_impl->graph_cache()->ipc_matched_services(topic_info());
+    rmw_service_info_t info{};
+    info.request_id.sequence_number = *sequence_id;
+    auto gid = entity_->copy_gid();
+    std::copy(gid.begin(), gid.end(), info.request_id.writer_guid);
+    info.source_timestamp = get_system_time_in_ns();
+    info.received_timestamp = info.source_timestamp;
+    bool delivered = false;
+    auto ret = prepare(user, ros_request, &info,
+      matched.empty() ? nullptr : matched.front().data(), matched.size(), &delivered);
+    if (ret != RMW_RET_OK || delivered) {return ret;}
   }
 
   size_t max_data_length = (
@@ -378,7 +400,6 @@ rmw_ret_t ClientData::send_request(
     return RMW_RET_ERROR;
   }
   size_t data_length = ser.get_serialized_data_length();
-  *sequence_id = sequence_number_++;
 
   // Send request
   auto opts = zenoh::Querier::GetOptions::create_default();
@@ -481,7 +502,7 @@ bool ClientData::queue_has_data_and_attach_condition_if_not(
   rmw_wait_set_data_t * wait_set_data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!reply_queue_.empty()) {
+  if (!reply_queue_.empty() || (ipc_ready_ && ipc_ready_(ipc_user_))) {
     return true;
   }
   wait_set_data_ = wait_set_data;
@@ -495,7 +516,7 @@ bool ClientData::detach_condition_and_queue_is_empty()
   std::lock_guard<std::mutex> lock(mutex_);
   wait_set_data_ = nullptr;
 
-  return reply_queue_.empty();
+  return reply_queue_.empty() && !(ipc_ready_ && ipc_ready_(ipc_user_));
 }
 
 ///=============================================================================
@@ -536,5 +557,21 @@ rmw_ret_t ClientData::shutdown()
 bool ClientData::is_shutdown() const
 {
   return is_shutdown_.load(std::memory_order_acquire);
+}
+void ClientData::ipc_configure(rmw_ipc_ready_fn ready, void * user)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  ipc_ready_ = ready;
+  ipc_user_ = user;
+}
+void ClientData::ipc_notify()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_callback_mgr_.trigger_callback();
+  if (wait_set_data_) {
+    std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
+    wait_set_data_->triggered = true;
+    wait_set_data_->condition_variable.notify_one();
+  }
 }
 }  // namespace rmw_zenoh_cpp

@@ -38,6 +38,7 @@
 #include "rcutils/allocator.h"
 
 #include "rmw/rmw.h"
+#include "rmw/intra_process_service.h"
 #include "rmw/ret_types.h"
 
 namespace rmw_zenoh_cpp
@@ -81,6 +82,8 @@ public:
   rmw_ret_t send_request(
     const void * ros_request,
     int64_t * sequence_id);
+  rmw_ret_t send_request_ipc(
+    const void *, int64_t *, rmw_ipc_request_fn, void *);
 
   // Set a callback to be called when events happen.
   void set_on_new_response_callback(
@@ -100,6 +103,9 @@ public:
   // Check if this ClientData is shutdown.
   bool is_shutdown() const;
 
+  void ipc_configure(rmw_ipc_ready_fn ready, void * user);
+  void ipc_notify();
+
   // Destructor.
   ~ClientData();
 
@@ -116,6 +122,8 @@ private:
     std::shared_ptr<RequestTypeSupport> request_type_support,
     std::shared_ptr<ResponseTypeSupport> response_type_support);
 
+  rmw_ipc_ready_fn ipc_ready_ = nullptr;
+  void * ipc_user_ = nullptr;
   // Internal mutex.
   mutable std::mutex mutex_;
   // The parent node.

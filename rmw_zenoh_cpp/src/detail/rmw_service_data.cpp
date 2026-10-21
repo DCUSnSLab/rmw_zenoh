@@ -486,7 +486,7 @@ bool ServiceData::queue_has_data_and_attach_condition_if_not(
   rmw_wait_set_data_t * wait_set_data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!query_queue_.empty()) {
+  if (!query_queue_.empty() || (ipc_ready_ && ipc_ready_(ipc_user_))) {
     return true;
   }
   wait_set_data_ = wait_set_data;
@@ -500,7 +500,7 @@ bool ServiceData::detach_condition_and_queue_is_empty()
   std::lock_guard<std::mutex> lock(mutex_);
   wait_set_data_ = nullptr;
 
-  return query_queue_.empty();
+  return query_queue_.empty() && !(ipc_ready_ && ipc_ready_(ipc_user_));
 }
 
 ///=============================================================================
@@ -544,5 +544,25 @@ rmw_ret_t ServiceData::shutdown()
 bool ServiceData::is_shutdown() const
 {
   return is_shutdown_.load(std::memory_order_acquire);
+}
+std::array<uint8_t, RMW_GID_STORAGE_SIZE> ServiceData::copy_gid() const
+{
+  return entity_->copy_gid();
+}
+void ServiceData::ipc_configure(rmw_ipc_ready_fn ready, void * user)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  ipc_ready_ = ready;
+  ipc_user_ = user;
+}
+void ServiceData::ipc_notify()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_callback_mgr_.trigger_callback();
+  if (wait_set_data_) {
+    std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
+    wait_set_data_->triggered = true;
+    wait_set_data_->condition_variable.notify_one();
+  }
 }
 }  // namespace rmw_zenoh_cpp
