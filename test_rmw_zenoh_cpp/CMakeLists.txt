@@ -52,6 +52,11 @@ if(BUILD_TESTING)
       ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=true
       ZENOH_SHM_ALLOC_SIZE=1048576 GTEST_FILTER=TestSmallPool.*)
 
+  ament_add_gtest_test(test_loans TEST_NAME test_loans_broker
+    ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp ROS_DISABLE_LOANED_MESSAGES=0
+      RCL_INTRA_PROCESS=1 ZENOH_CONFIG_OVERRIDE=transport/shared_memory/enabled=true
+      GTEST_FILTER=TestBrokerLoans.*)
+
   ament_lint_auto_find_test_dependencies()
 
   ament_add_ros_isolated_gtest(test_rmw_zenoh_session

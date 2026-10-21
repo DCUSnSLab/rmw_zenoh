@@ -28,6 +28,7 @@
 #include "rclcpp/executors/single_threaded_executor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rmw/rmw.h"
+#include "rcl/intra_process.h"
 #include "rmw/error_handling.h"
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -35,6 +36,13 @@
 #include "test_rmw_zenoh_cpp/msg/padded_payload.hpp"
 #include "test_rmw_zenoh_cpp/msg/plain_payload.hpp"
 #include "test_rmw_zenoh_cpp/msg/plain_leaf.h"
+
+rclcpp::SubscriptionOptions rmw_subscription_options()
+{
+  rclcpp::SubscriptionOptions options;
+  options.use_intra_process_comm = rclcpp::IntraProcessSetting::Disable;
+  return options;
+}
 
 using Plain = test_rmw_zenoh_cpp::msg::PlainPayload;
 using Nested = test_rmw_zenoh_cpp::msg::NestedPayload;
@@ -72,7 +80,8 @@ protected:
     rclcpp::init(0, nullptr);
     node = std::make_shared<rclcpp::Node>("test_loans");
     pub = node->create_publisher<Plain>("loans", 5);
-    sub = node->create_subscription<Plain>("loans", 5, [](const Plain &) {});
+    sub = node->create_subscription<Plain>(
+      "loans", 5, [](const Plain &) {}, rmw_subscription_options());
     ASSERT_TRUE(pub->can_loan_messages());
     ASSERT_TRUE(sub->can_loan_messages());
   }
@@ -176,7 +185,8 @@ TEST_F(TestLoans, return_and_invalid_arguments)
 
 TEST_F(TestLoans, mixed_loaned_and_regular_takes)
 {
-  auto regular = node->create_subscription<Plain>("loans", 5, [](const Plain &) {});
+  auto regular = node->create_subscription<Plain>(
+    "loans", 5, [](const Plain &) {}, rmw_subscription_options());
   auto loan = pub->borrow_loaned_message();
   loan.get().stamp = 99;
   loan.get().data.fill(17);
@@ -372,7 +382,7 @@ TEST_F(TestLoans, user_is_last_owner)
         kept = message;
       }
       ++received;
-    });
+    }, rmw_subscription_options());
   auto publisher = node->create_publisher<Plain>("kept_loans", 1);
   ASSERT_TRUE(keeper->can_loan_messages());
   rclcpp::executors::SingleThreadedExecutor executor;
@@ -402,7 +412,8 @@ TEST_F(TestLoans, user_is_last_owner)
 
 TEST_F(TestLoans, subscription_is_last_owner)
 {
-  auto idle = node->create_subscription<Plain>("queued_loans", 3, [](const Plain &) {});
+  auto idle = node->create_subscription<Plain>(
+    "queued_loans", 3, [](const Plain &) {}, rmw_subscription_options());
   auto publisher = node->create_publisher<Plain>("queued_loans", 3);
   auto churn = node->create_publisher<Plain>("churn_loans", 1);
   for (int64_t stamp = 1; stamp <= 3; ++stamp) {
@@ -423,7 +434,8 @@ TEST_F(TestLoans, user_held_loans_exhaust_the_pool)
 {
   std::vector<std::shared_ptr<const Plain>> kept;
   auto keeper = node->create_subscription<Plain>(
-    "held_loans", 20, [&](std::shared_ptr<const Plain> message) {kept.push_back(message);});
+    "held_loans", 20, [&](std::shared_ptr<const Plain> message) {kept.push_back(message);},
+    rmw_subscription_options());
   auto publisher = node->create_publisher<Plain>("held_loans", 20);
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);
@@ -470,7 +482,8 @@ TEST(TestSmallPool, publisher_falls_back)
   {
     auto node = std::make_shared<rclcpp::Node>("test_small_pool");
     auto pub = node->create_publisher<Plain>("small_pool", 5);
-    auto sub = node->create_subscription<Plain>("small_pool", 5, [](const Plain &) {});
+    auto sub = node->create_subscription<Plain>(
+      "small_pool", 5, [](const Plain &) {}, rmw_subscription_options());
     EXPECT_FALSE(pub->can_loan_messages());
     ASSERT_TRUE(sub->can_loan_messages());
     auto message = pub->borrow_loaned_message();
@@ -507,7 +520,8 @@ TEST(TestLoanPool, entities_do_not_reserve_the_pool)
     auto node = std::make_shared<rclcpp::Node>("test_loan_pool");
     const size_t before = locked_kilobytes();
     auto pub = node->create_publisher<Plain>("loan_pool", 5);
-    auto sub = node->create_subscription<Plain>("loan_pool", 5, [](const Plain &) {});
+    auto sub = node->create_subscription<Plain>(
+      "loan_pool", 5, [](const Plain &) {}, rmw_subscription_options());
     EXPECT_TRUE(pub->can_loan_messages());
     EXPECT_TRUE(sub->can_loan_messages());
     EXPECT_EQ(before, locked_kilobytes());
@@ -515,3 +529,48 @@ TEST(TestLoanPool, entities_do_not_reserve_the_pool)
   rclcpp::shutdown();
 }
 #endif
+
+TEST(TestBrokerLoans, shared_ownership_and_borrowed_publication)
+{
+  rclcpp::init(0, nullptr);
+  {
+    auto node = std::make_shared<rclcpp::Node>("broker_loans");
+    auto publisher = node->create_publisher<Plain>("broker_loans", 5);
+    std::vector<std::shared_ptr<const Plain>> kept;
+    auto subscription = node->create_subscription<Plain>(
+      "broker_loans", 5, [&](std::shared_ptr<const Plain> message) {kept.push_back(message);});
+    if (!rcl_subscription_is_ipc_enabled(subscription->get_subscription_handle().get())) {
+      node.reset();
+      rclcpp::shutdown();
+      GTEST_SKIP() << "requires RCL_INTRA_PROCESS=1";
+    }
+    EXPECT_FALSE(subscription->can_loan_messages());
+    std::vector<std::shared_ptr<const Plain>> shared;
+    auto another = node->create_subscription<Plain>(
+      "broker_loans", 5, [&](std::shared_ptr<const Plain> message) {shared.push_back(message);});
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    for (int64_t stamp = 1; stamp <= 30; ++stamp) {
+      auto message = std::make_unique<Plain>();
+      message->stamp = stamp;
+      message->data.fill(static_cast<uint8_t>(stamp));
+      publisher->publish(std::move(message));
+      const auto count = static_cast<size_t>(stamp);
+      spin_until(executor, [&]() {return kept.size() == count && shared.size() == count;});
+    }
+    auto loan = publisher->borrow_loaned_message();
+    loan.get().stamp = 31;
+    loan.get().data.fill(31);
+    publisher->publish(std::move(loan));
+    spin_until(executor, [&]() {return kept.size() == 31 && shared.size() == 31;});
+    another.reset();
+    subscription.reset();
+    publisher.reset();
+    for (size_t i = 0; i < kept.size(); ++i) {
+      if (i < 30) {EXPECT_EQ(kept[i].get(), shared[i].get());}
+      EXPECT_TRUE(intact(*kept[i], static_cast<int64_t>(i + 1)));
+      EXPECT_TRUE(intact(*shared[i], static_cast<int64_t>(i + 1)));
+    }
+  }
+  rclcpp::shutdown();
+}
