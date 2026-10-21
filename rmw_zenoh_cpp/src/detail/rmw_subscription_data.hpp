@@ -95,10 +95,12 @@ public:
   // Check if this SubscriptionData is shutdown.
   bool is_shutdown() const;
 
+  struct IpcDecode {SubscriptionData * sub; const Payload * payload;};
   void ipc_configure(
     rmw_ipc_ready_fn ready, rmw_ipc_ingress_fn ingress, void * user,
     uint8_t * gid);
   void ipc_notify();
+  static rmw_ret_t ipc_copy_serialized(void * input, rmw_serialized_message_t * output);
   // Add a new message to the queue.
   void add_new_message(std::unique_ptr<Message> msg, const std::string & topic_name);
 

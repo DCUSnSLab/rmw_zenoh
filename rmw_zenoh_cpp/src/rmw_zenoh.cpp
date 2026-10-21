@@ -53,6 +53,7 @@
 #include "rmw/impl/cpp/macros.hpp"
 #include "rmw/ret_types.h"
 #include "rmw/rmw.h"
+#include "rmw/intra_process_serialized.h"
 #include "rmw/validate_namespace.h"
 #include "rmw/validate_node_name.h"
 
@@ -2830,5 +2831,13 @@ void ipc_notify(const rmw_subscription_t * sub)
 extern "C" RMW_PUBLIC const rmw_ipc_api_t * rmw_get_intra_process_api_v1()
 {
   static const rmw_ipc_api_t api{sizeof(rmw_ipc_api_t), 1, ipc_publish, ipc_configure, ipc_notify};
+  return &api;
+}
+
+extern "C" RMW_PUBLIC const rmw_ipc_serialized_api_t * rmw_get_intra_process_serialized_api_v1()
+{
+  static const rmw_ipc_serialized_api_t api{
+    sizeof(rmw_ipc_serialized_api_t), 1,
+    rmw_zenoh_cpp::SubscriptionData::ipc_copy_serialized};
   return &api;
 }

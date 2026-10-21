@@ -582,9 +582,9 @@ void SubscriptionData::add_new_message(
   if (std::find(msg->attachment.ipc_excluded.begin(), msg->attachment.ipc_excluded.end(),
     entity_->copy_gid()) != msg->attachment.ipc_excluded.end()) {return;}
   if (ipc_ingress_) {
-    struct Decode {SubscriptionData * sub; const Payload * payload;} decode{this, &msg->payload};
+    IpcDecode decode{this, &msg->payload};
     auto convert = [](void * value, void * output) {
-        auto state = static_cast<Decode *>(value);
+        auto state = static_cast<IpcDecode *>(value);
         return state->sub->deserialize(*state->payload, output);
       };
     rmw_message_info_t info = rmw_get_zero_initialized_message_info();
@@ -686,10 +686,9 @@ void SubscriptionData::ipc_configure(
   while (ipc_ingress_ && !message_queue_.empty()) {
     auto message = std::move(message_queue_.front());
     message_queue_.pop_front();
-    struct Decode {SubscriptionData * sub; const Payload * payload;
-    } decode{this, &message->payload};
+    IpcDecode decode{this, &message->payload};
     auto convert = [](void * value, void * output) {
-        auto state = static_cast<Decode *>(value);
+        auto state = static_cast<IpcDecode *>(value);
         return state->sub->deserialize(*state->payload, output);
       };
     rmw_message_info_t info = rmw_get_zero_initialized_message_info();
@@ -717,5 +716,22 @@ void SubscriptionData::ipc_notify()
     wait_set_data_->triggered = true;
     wait_set_data_->condition_variable.notify_one();
   }
+}
+}  // namespace rmw_zenoh_cpp
+
+namespace rmw_zenoh_cpp
+{
+rmw_ret_t SubscriptionData::ipc_copy_serialized(
+  void * input, rmw_serialized_message_t * output)
+{
+  auto state = static_cast<IpcDecode *>(input);
+  auto size = state->payload->size();
+  if (output->buffer_capacity < size) {
+    auto ret = rmw_serialized_message_resize(output, size);
+    if (ret != RMW_RET_OK) {return ret;}
+  }
+  state->payload->copy_to(output->buffer);
+  output->buffer_length = size;
+  return RMW_RET_OK;
 }
 }  // namespace rmw_zenoh_cpp
