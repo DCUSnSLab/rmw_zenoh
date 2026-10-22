@@ -68,6 +68,17 @@ if(BUILD_TESTING)
     zenohcxx::zenohc
   )
 
+  ament_add_ros_isolated_gtest(test_attachment_from_the_network
+    test/test_attachment_from_the_network.cpp
+    TIMEOUT 60
+    ENV RMW_IMPLEMENTATION=rmw_zenoh_cpp RCL_INTRA_PROCESS=0)
+  target_link_libraries(test_attachment_from_the_network
+    rclcpp::rclcpp
+    rmw_zenoh_cpp::rmw_zenoh_cpp
+    zenohcxx::zenohc
+    ${test_msgs_TARGETS}
+  )
+
   ament_add_ros_isolated_gtest(test_client_destroy_during_reply
     test/test_client_destroy_during_reply.cpp
     TIMEOUT 120
