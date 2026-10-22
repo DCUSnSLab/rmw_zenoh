@@ -14,6 +14,25 @@ subscriber of the same sample, in this and other processes. Do not modify it.
 rclcpp disables middleware loans for publishers using intra-process communication
 and uses its existing allocator and intra-process path instead.
 
+rclpy uses the same loans. `Publisher.borrow_loaned_message()` returns a message
+whose numeric arrays are writable NumPy views of the loan when
+`Publisher.can_loan_messages` is true, and an ordinary new message otherwise;
+`Publisher.publish()` of that message publishes the loan. A subscription with
+`Subscription.can_loan_messages` true takes loans; with `RCLPY_MESSAGE_ARRAYS=numpy`
+its numeric arrays are read-only views of the loan, which is returned when the last
+view is gone.
+
+## The rcl broker
+
+With `RCL_INTRA_PROCESS=1` rcl delivers messages between endpoints of the same rcl
+context through its own broker, using the routing extension this RMW exports.
+A subscription that joins the broker takes no loans: rcl reports
+`can_loan_messages` as false for it, and messages from other contexts and processes
+reach its broker queue through normal deserialization. Subscriptions outside the
+broker (another QoS, a content filter, or opted out) keep the behavior above.
+`rcl_publish_loaned_message` does not use the broker, so a loaned publication
+reaches same-context broker subscriptions through this RMW.
+
 ## Supported layouts
 
 Loan eligibility requires the generated Fast RTPS `PLAIN_TYPE` classification and
@@ -49,8 +68,10 @@ creates an additional POSIX Zenoh SHM provider with eight-byte alignment for ROS
 loans on the first publisher borrow. Zenoh locks the whole pool in memory, so
 creating loan-capable publishers and subscriptions does not create it. Its capacity
 uses the configured transport SHM pool size (`ZENOH_SHM_ALLOC_SIZE` or
-`transport/shared_memory/transport_optimization/pool_size`). A process that borrows
-holds one additional pool; the transport pool is unchanged. The transport
+`transport/shared_memory/transport_optimization/pool_size`, 48 MiB in the default
+configuration). A process that borrows holds one additional pool; the transport
+pool is unchanged. Creating the pool makes the first borrow in a process slower,
+about 24 ms with the default size in our measurement; later borrows do not pay it. The transport
 message-size threshold does not restrict explicit message loans.
 
 ## Ownership and allocation limits
