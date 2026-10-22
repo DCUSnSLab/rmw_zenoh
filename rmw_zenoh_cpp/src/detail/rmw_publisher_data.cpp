@@ -421,7 +421,6 @@ rmw_ret_t PublisherData::publish(
   // session use different encoding formats. In our case, all key expressions
   // will be encoded with CDR so it does not really matter.
   zenoh::ZResult result;
-  int64_t source_timestamp = rmw_zenoh_cpp::get_system_time_in_ns();
   auto opts = zenoh::ext::AdvancedPublisher::PutOptions::create_default();
   opts.put_options.attachment = attachment.serialize_to_zbytes();
 
@@ -444,7 +443,8 @@ rmw_ret_t PublisherData::publish(
   always_free_msg_bytes.cancel();
 
   TRACETOOLS_TRACEPOINT(
-    rmw_publish, static_cast<const void *>(rmw_publisher_), ros_message, source_timestamp);
+    rmw_publish, static_cast<const void *>(rmw_publisher_), ros_message,
+    attachment.source_timestamp());
   pub_.put(std::move(payload), std::move(opts), &result);
   if (result != Z_OK) {
     if (result == Z_ESESSION_CLOSED) {
