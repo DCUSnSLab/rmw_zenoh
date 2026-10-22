@@ -81,8 +81,25 @@ AttachmentData::AttachmentData(const zenoh::Bytes & bytes)
   this->sequence_number_ = deserializer.deserialize<int64_t>();
   this->source_timestamp_ = deserializer.deserialize<int64_t>();
   this->source_gid_ = deserializer.deserialize<std::array<uint8_t, RMW_GID_STORAGE_SIZE>>();
-  if (!deserializer.is_done()) {
-    ipc_excluded = deserializer.deserialize<decltype(ipc_excluded)>();
+  if (deserializer.is_done()) {
+    return;
+  }
+  // Any peer can send this list, so its length is trusted only as far as the entries that follow
+  // it; a malformed list excludes nobody.
+  size_t count = 0;
+  if (::ze_deserializer_deserialize_sequence_length(
+      zenoh::interop::as_copyable_c_ptr(deserializer), &count) != Z_OK)
+  {
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    zenoh::ZResult result = Z_OK;
+    auto gid = deserializer.deserialize<std::array<uint8_t, RMW_GID_STORAGE_SIZE>>(&result);
+    if (result != Z_OK) {
+      ipc_excluded.clear();
+      return;
+    }
+    ipc_excluded.push_back(gid);
   }
 }
 }  // namespace rmw_zenoh_cpp
