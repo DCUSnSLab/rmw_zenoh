@@ -310,7 +310,6 @@ SubscriptionData::~SubscriptionData()
 rmw_ret_t SubscriptionData::shutdown()
 {
   rmw_ret_t ret = RMW_RET_OK;
-  std::optional<zenoh::LivelinessToken> token;
   std::optional<zenoh::ext::AdvancedSubscriber<void>> sub;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -319,25 +318,22 @@ rmw_ret_t SubscriptionData::shutdown()
     }
     is_shutdown_ = true;
     initialized_ = false;
-    token = std::move(token_);
-    token_.reset();
     sub = std::move(sub_);
     sub_.reset();
   }
 
+  // Remove any event callbacks registered to this subscription.
   graph_cache_->remove_qos_event_callbacks(entity_->gid_hash());
 
-  // Undeclaring waits for in-flight sample callbacks, which take mutex_.
+  // Unregister this subscription from the ROS graph.
   zenoh::ZResult result;
-  if (token.has_value()) {
-    std::move(token.value()).undeclare(&result);
-    if (result != Z_OK) {
-      RMW_ZENOH_LOG_ERROR_NAMED(
-        "rmw_zenoh_cpp",
-        "Unable to undeclare the liveliness token for topic '%s'",
-        entity_->topic_info().value().name_.c_str());
-      ret = RMW_RET_ERROR;
-    }
+  std::move(token_).value().undeclare(&result);
+  if (result != Z_OK) {
+    RMW_ZENOH_LOG_ERROR_NAMED(
+      "rmw_zenoh_cpp",
+      "Unable to undeclare the liveliness token for topic '%s'",
+      entity_->topic_info().value().name_.c_str());
+    ret = RMW_RET_ERROR;
   }
 
   if (sub.has_value()) {
