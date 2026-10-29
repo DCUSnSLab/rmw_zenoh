@@ -170,15 +170,22 @@ size_t ShmContext::pool_size() const
 std::shared_ptr<zenoh::PosixShmProvider> ShmContext::get_loan_provider()
 {
   std::lock_guard<std::mutex> lock(loan_mutex_);
-  if (!loan_provider_) {
+  if (!loan_provider_ && !loan_provider_failed_) {
     // The transport provider only supports byte alignment. ROS structs require up to eight.
     zenoh::ZResult result;
     zenoh::MemoryLayout layout((pool_size_ + 7) & ~size_t{7}, zenoh::AllocAlignment{3}, &result);
-    if (result != Z_OK) {
-      return nullptr;
+    std::shared_ptr<zenoh::PosixShmProvider> provider;
+    if (result == Z_OK) {
+      provider = std::make_shared<zenoh::PosixShmProvider>(layout, &result);
     }
-    auto provider = std::make_shared<zenoh::PosixShmProvider>(layout, &result);
     if (result != Z_OK) {
+      // Retrying costs a pool sized mapping and mlock on every borrow, e.g. under a low
+      // RLIMIT_MEMLOCK, so loans fall back to the heap for the rest of the process.
+      loan_provider_failed_ = true;
+      RMW_ZENOH_LOG_WARN_NAMED(
+        "rmw_zenoh_cpp",
+        "Unable to create the %zu byte shared memory pool for loaned messages, "
+        "loans use the heap", pool_size_);
       return nullptr;
     }
     loan_provider_ = std::move(provider);

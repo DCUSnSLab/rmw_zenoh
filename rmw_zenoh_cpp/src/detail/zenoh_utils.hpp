@@ -121,6 +121,7 @@ private:
   size_t pool_size_;
   std::mutex loan_mutex_;
   std::shared_ptr<zenoh::PosixShmProvider> loan_provider_;
+  bool loan_provider_failed_ = false;
 };
 
 ///=============================================================================
