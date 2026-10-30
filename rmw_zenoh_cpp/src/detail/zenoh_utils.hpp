@@ -23,7 +23,6 @@
 #include <cstdlib>
 #include <functional>
 #include <mutex>
-#include <memory>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -87,20 +86,23 @@ public:
 
   ~Payload() = default;
 
-  // Null when the payload is a CDR header and body in separate slices.
   const uint8_t * data() const;
 
   size_t size() const;
 
   bool empty() const;
 
-  const uint8_t * contiguous_data(size_t offset, size_t length) const;
-
-  void copy_to(uint8_t * destination) const;
-
 private:
-  zenoh::Bytes bytes_;
-  std::optional<std::vector<uint8_t>> flat_;
+  struct Contiguous
+  {
+    zenoh::Slice slice;
+    zenoh::Bytes bytes;
+  };
+  using NonContiguous = std::vector<uint8_t>;
+  using Empty = std::nullptr_t;
+  // Is `std::vector<uint8_t>` in case of a non-contiguous payload
+  // and `zenoh::Slice` plus a `zenoh::Bytes` otherwise.
+  std::variant<NonContiguous, Contiguous, Empty> bytes_;
 };
 
 ///=============================================================================
@@ -108,20 +110,9 @@ struct ShmContext
 {
   size_t msgsize_threshold;
 
-  explicit ShmContext(size_t msgsize_threshold, size_t pool_size);
+  explicit ShmContext(size_t msgsize_threshold);
 
   std::optional<zenoh::SharedShmProvider> get_shm_provider(zenoh::Session & session);
-
-  size_t pool_size() const;
-
-  // Created on first use: zenoh locks the whole pool in memory.
-  std::shared_ptr<zenoh::PosixShmProvider> get_loan_provider();
-
-private:
-  size_t pool_size_;
-  std::mutex loan_mutex_;
-  std::shared_ptr<zenoh::PosixShmProvider> loan_provider_;
-  bool loan_provider_failed_ = false;
 };
 
 ///=============================================================================

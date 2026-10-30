@@ -381,21 +381,6 @@ bool SubscriptionData::detach_condition_and_queue_is_empty()
   return message_queue_.empty() && !(ipc_ready_ && ipc_ready_(ipc_user_));
 }
 
-bool SubscriptionData::configure_loaning(
-  const rosidl_message_type_support_t * typesupport, ShmContext * shm)
-{
-  if (!shm) {
-    return false;
-  }
-  auto type = LoanType::make(
-    typesupport, static_cast<const message_type_support_callbacks_t *>(type_support_impl_));
-  if (!type) {
-    return false;
-  }
-  loan_type_ = std::move(type);
-  return true;
-}
-
 void SubscriptionData::fill_message_info(const Message & message, rmw_message_info_t * info)
 {
   if (!info) {
@@ -412,84 +397,14 @@ void SubscriptionData::fill_message_info(const Message & message, rmw_message_in
 
 bool SubscriptionData::deserialize(const Payload & payload, void * ros_message)
 {
-  const uint8_t * header = payload.contiguous_data(0, 4);
-  const uint8_t * data = payload.data();
-  if (data) {
-    eprosima::fastcdr::FastBuffer buffer(
-      reinterpret_cast<char *>(const_cast<uint8_t *>(data)), payload.size());
-    rmw_zenoh_cpp::Cdr deser(buffer);
-    if (type_support_->deserialize_ros_message(deser.get_cdr(), ros_message, type_support_impl_)) {
-      return true;
-    }
-  } else if (header && header[0] == 0 && header[1] <= 1) {
-    const uint8_t * body = payload.contiguous_data(4, payload.size() - 4);
-    eprosima::fastcdr::FastBuffer buffer(
-      reinterpret_cast<char *>(const_cast<uint8_t *>(body)), payload.size() - 4);
-    rmw_zenoh_cpp::Cdr deser(buffer, static_cast<eprosima::fastcdr::Cdr::Endianness>(header[1]));
-    if (type_support_->deserialize_ros_message_body(
-        deser.get_cdr(), ros_message, type_support_impl_))
-    {
-      return true;
-    }
+  eprosima::fastcdr::FastBuffer buffer(
+    reinterpret_cast<char *>(const_cast<uint8_t *>(payload.data())), payload.size());
+  rmw_zenoh_cpp::Cdr deser(buffer);
+  if (!type_support_->deserialize_ros_message(deser.get_cdr(), ros_message, type_support_impl_)) {
+    RMW_SET_ERROR_MSG("could not deserialize ROS message");
+    return false;
   }
-  RMW_SET_ERROR_MSG("could not deserialize ROS message");
-  return false;
-}
-
-///=============================================================================
-rmw_ret_t SubscriptionData::take_loaned_message(
-  void ** message, rmw_message_info_t * info, bool * taken)
-{
-  *taken = false;
-  *message = nullptr;
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!loan_type_) {
-    return RMW_RET_UNSUPPORTED;
-  }
-  if (is_shutdown_ || message_queue_.empty()) {
-    return RMW_RET_OK;
-  }
-  auto sample = std::move(message_queue_.front());
-  message_queue_.pop_front();
-  auto & payload = sample->payload;
-  const auto * header = payload.contiguous_data(0, 4);
-  const auto * body = payload.contiguous_data(4, loan_type_->size);
-  const uint16_t native = 1;
-  const bool native_encoding = header && header[0] == 0 &&
-    header[1] == *reinterpret_cast<const uint8_t *>(&native);
-  Loan loan;
-  if (native_encoding && body &&
-    reinterpret_cast<uintptr_t>(body) % loan_type_->alignment == 0)
-  {
-    *message = const_cast<uint8_t *>(body);
-  } else {
-    loan.buffer = LoanBuffer::allocate(*loan_type_, rmw_node_->context->options.allocator);
-    if (!loan.buffer) {
-      RMW_SET_ERROR_MSG("unable to allocate subscription loan");
-      return RMW_RET_BAD_ALLOC;
-    }
-    if (!deserialize(payload, loan.buffer->data())) {
-      return RMW_RET_ERROR;
-    }
-    *message = loan.buffer->data();
-  }
-  fill_message_info(*sample, info);
-  loan.message = std::move(sample);
-  loans_.emplace(*message, std::move(loan));
-  *taken = true;
-  return RMW_RET_OK;
-}
-
-rmw_ret_t SubscriptionData::return_loaned_message(void * message)
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto loan = loans_.find(message);
-  if (loan == loans_.end()) {
-    RMW_SET_ERROR_MSG("message is not a loan from this subscription");
-    return RMW_RET_INVALID_ARGUMENT;
-  }
-  loans_.erase(loan);
-  return RMW_RET_OK;
+  return true;
 }
 
 ///=============================================================================
@@ -558,7 +473,10 @@ rmw_ret_t SubscriptionData::take_serialized_message(
     }
   }
   serialized_message->buffer_length = payload_data.size();
-  payload_data.copy_to(serialized_message->buffer);
+  memcpy(
+    serialized_message->buffer,
+    reinterpret_cast<char *>(const_cast<uint8_t *>(payload_data.data())),
+    payload_data.size());
 
   *taken = true;
 
@@ -726,7 +644,7 @@ rmw_ret_t SubscriptionData::ipc_copy_serialized(
     auto ret = rmw_serialized_message_resize(output, size);
     if (ret != RMW_RET_OK) {return ret;}
   }
-  state->payload->copy_to(output->buffer);
+  memcpy(output->buffer, state->payload->data(), size);
   output->buffer_length = size;
   return RMW_RET_OK;
 }

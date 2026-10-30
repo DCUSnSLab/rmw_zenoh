@@ -22,12 +22,10 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include <zenoh.hxx>
 
 #include "event.hpp"
-#include "loaned_message.hpp"
 #include "liveliness_utils.hpp"
 #include "message_type_support.hpp"
 #include "type_support_common.hpp"
@@ -56,15 +54,6 @@ public:
     const std::string & topic_name,
     const rosidl_message_type_support_t * type_support,
     const rmw_qos_profile_t * qos_profile);
-
-  bool configure_loaning(const rosidl_message_type_support_t * typesupport, ShmContext * shm);
-
-  rmw_ret_t borrow_loaned_message(
-    const rosidl_message_type_support_t * typesupport, void ** message, ShmContext * shm);
-
-  rmw_ret_t return_loaned_message(void * message);
-
-  rmw_ret_t publish_loaned_message(void * message);
 
   // Publish a ROS message.
   rmw_ret_t publish(const void * ros_message, ShmContext * shm);
@@ -132,8 +121,6 @@ private:
   std::unique_ptr<MessageTypeSupport> type_support_;
   std::shared_ptr<EventsManager> events_mgr_;
   size_t sequence_number_;
-  std::unique_ptr<LoanType> loan_type_;
-  std::unordered_map<void *, std::unique_ptr<LoanBuffer>> loans_;
   // Shutdown flag.
   bool is_shutdown_;
 };

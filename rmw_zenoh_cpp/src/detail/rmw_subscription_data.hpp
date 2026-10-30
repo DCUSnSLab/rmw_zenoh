@@ -30,7 +30,6 @@
 #include <zenoh.hxx>
 
 #include "event.hpp"
-#include "loaned_message.hpp"
 #include "graph_cache.hpp"
 #include "liveliness_utils.hpp"
 #include "message_type_support.hpp"
@@ -108,12 +107,6 @@ public:
 
   bool detach_condition_and_queue_is_empty();
 
-  bool configure_loaning(const rosidl_message_type_support_t * typesupport, ShmContext * shm);
-
-  rmw_ret_t take_loaned_message(void ** message, rmw_message_info_t * info, bool * taken);
-
-  rmw_ret_t return_loaned_message(void * message);
-
   rmw_ret_t take_one_message(
     void * ros_message,
     rmw_message_info_t * message_info,
@@ -149,13 +142,6 @@ private:
 
   bool deserialize(const Payload & payload, void * ros_message);
 
-  struct Loan
-  {
-    std::unique_ptr<Message> message;
-    std::unique_ptr<LoanBuffer> buffer;
-  };
-
-
   rmw_ipc_ingress_fn ipc_ingress_ = nullptr;
   rmw_ipc_ready_fn ipc_ready_ = nullptr;
   void * ipc_user_ = nullptr;
@@ -176,8 +162,6 @@ private:
   // Type support fields
   const void * type_support_impl_;
   std::unique_ptr<MessageTypeSupport> type_support_;
-  std::unique_ptr<LoanType> loan_type_;
-  std::unordered_multimap<void *, Loan> loans_;
   // Subscription options.
   rmw_subscription_options_t sub_options_;
   std::deque<std::unique_ptr<Message>> message_queue_;
