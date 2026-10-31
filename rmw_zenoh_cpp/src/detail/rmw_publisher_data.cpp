@@ -16,7 +16,6 @@
 
 #include <fastcdr/FastBuffer.h>
 
-#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <memory>
@@ -209,14 +208,9 @@ PublisherData::PublisherData(
 }
 
 ///=============================================================================
-rmw_ret_t PublisherData::publish(const void * ros_message, ShmContext * shm)
-{
-  return publish(ros_message, shm, nullptr, nullptr);
-}
-
 rmw_ret_t PublisherData::publish(
   const void * ros_message,
-  ShmContext * shm, rmw_ipc_prepare_fn prepare, void * user)
+  ShmContext * shm)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (is_shutdown_) {
@@ -224,33 +218,6 @@ rmw_ret_t PublisherData::publish(
     return RMW_RET_ERROR;
   }
 
-  auto attachment = AttachmentData(sequence_number_++, get_system_time_in_ns(),
-      entity_->copy_gid());
-  if (prepare) {
-    auto context = static_cast<rmw_context_impl_s *>(rmw_node_->data);
-    auto matched = context->graph_cache()->ipc_matched_subscriptions(topic_info());
-    rmw_message_info_t info = rmw_get_zero_initialized_message_info();
-    info.publisher_gid.implementation_identifier = rmw_publisher_->implementation_identifier;
-    auto gid = entity_->copy_gid();
-    std::copy(gid.begin(), gid.end(), info.publisher_gid.data);
-    info.source_timestamp = attachment.source_timestamp();
-    info.publication_sequence_number = attachment.sequence_number();
-    rmw_ipc_route_t route{};
-    auto ret = prepare(user, ros_message, &info,
-      matched.empty() ? nullptr : matched.front().data(), matched.size(), &route);
-    if (ret != RMW_RET_OK) {return ret;}
-    for (size_t i = 0; i < route.excluded_count; ++i) {
-      std::array<uint8_t, RMW_GID_STORAGE_SIZE> id;
-      std::copy_n(route.excluded_gids + i * RMW_GID_STORAGE_SIZE, id.size(), id.begin());
-      attachment.ipc_excluded.push_back(id);
-    }
-    bool covered = true;
-    for (const auto & id : matched) {
-      covered = covered && std::find(attachment.ipc_excluded.begin(),
-        attachment.ipc_excluded.end(), id) != attachment.ipc_excluded.end();
-    }
-    if (covered) {return RMW_RET_OK;}
-  }
   // Serialize data.
   size_t max_data_length = type_support_->get_estimated_serialized_size(
     ros_message,
@@ -339,8 +306,10 @@ rmw_ret_t PublisherData::publish(
   // session use different encoding formats. In our case, all key expressions
   // will be encoded with CDR so it does not really matter.
   zenoh::ZResult result;
+  int64_t source_timestamp = rmw_zenoh_cpp::get_system_time_in_ns();
   auto opts = zenoh::ext::AdvancedPublisher::PutOptions::create_default();
-  opts.put_options.attachment = attachment.serialize_to_zbytes();
+  opts.put_options.attachment = rmw_zenoh_cpp::AttachmentData(
+    sequence_number_++, source_timestamp, entity_->copy_gid()).serialize_to_zbytes();
 
   zenoh::Bytes payload;
   if (shm_buf.has_value()) {
@@ -361,8 +330,7 @@ rmw_ret_t PublisherData::publish(
   always_free_msg_bytes.cancel();
 
   TRACETOOLS_TRACEPOINT(
-    rmw_publish, static_cast<const void *>(rmw_publisher_), ros_message,
-    attachment.source_timestamp());
+    rmw_publish, static_cast<const void *>(rmw_publisher_), ros_message, source_timestamp);
   pub_.put(std::move(payload), std::move(opts), &result);
   if (result != Z_OK) {
     if (result == Z_ESESSION_CLOSED) {

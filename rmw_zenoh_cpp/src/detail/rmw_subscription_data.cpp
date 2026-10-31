@@ -363,7 +363,7 @@ bool SubscriptionData::queue_has_data_and_attach_condition_if_not(
   rmw_wait_set_data_t * wait_set_data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!message_queue_.empty() || (ipc_ready_ && ipc_ready_(ipc_user_))) {
+  if (!message_queue_.empty()) {
     return true;
   }
 
@@ -378,33 +378,7 @@ bool SubscriptionData::detach_condition_and_queue_is_empty()
   std::lock_guard<std::mutex> lock(mutex_);
   wait_set_data_ = nullptr;
 
-  return message_queue_.empty() && !(ipc_ready_ && ipc_ready_(ipc_user_));
-}
-
-void SubscriptionData::fill_message_info(const Message & message, rmw_message_info_t * info)
-{
-  if (!info) {
-    return;
-  }
-  info->source_timestamp = message.attachment.source_timestamp();
-  info->received_timestamp = message.recv_timestamp;
-  info->publication_sequence_number = message.attachment.sequence_number();
-  info->reception_sequence_number = reception_sn_.fetch_add(1, std::memory_order_relaxed);
-  info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
-  memcpy(info->publisher_gid.data, message.attachment.copy_gid().data(), RMW_GID_STORAGE_SIZE);
-  info->from_intra_process = false;
-}
-
-bool SubscriptionData::deserialize(const Payload & payload, void * ros_message)
-{
-  eprosima::fastcdr::FastBuffer buffer(
-    reinterpret_cast<char *>(const_cast<uint8_t *>(payload.data())), payload.size());
-  rmw_zenoh_cpp::Cdr deser(buffer);
-  if (!type_support_->deserialize_ros_message(deser.get_cdr(), ros_message, type_support_impl_)) {
-    RMW_SET_ERROR_MSG("could not deserialize ROS message");
-    return false;
-  }
-  return true;
+  return message_queue_.empty();
 }
 
 ///=============================================================================
@@ -431,11 +405,35 @@ rmw_ret_t SubscriptionData::take_one_message(
       "SubscriptionData not able to get slice data");
     return RMW_RET_ERROR;
   }
-  if (!deserialize(payload_data, ros_message)) {
+  // Object that manages the raw buffer
+  eprosima::fastcdr::FastBuffer fastbuffer(
+    reinterpret_cast<char *>(const_cast<uint8_t *>(payload_data.data())),
+    payload_data.size());
+
+  // Object that serializes the data
+  rmw_zenoh_cpp::Cdr deser(fastbuffer);
+  if (!type_support_->deserialize_ros_message(
+      deser.get_cdr(),
+      ros_message,
+      type_support_impl_))
+  {
+    RMW_SET_ERROR_MSG("could not deserialize ROS message");
     return RMW_RET_ERROR;
   }
 
-  fill_message_info(*msg_data, message_info);
+  if (message_info != nullptr) {
+    message_info->source_timestamp = msg_data->attachment.source_timestamp();
+    message_info->received_timestamp = msg_data->recv_timestamp;
+    message_info->publication_sequence_number = msg_data->attachment.sequence_number();
+    message_info->reception_sequence_number =
+      reception_sn_.fetch_add(1, std::memory_order_relaxed);
+    message_info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
+    memcpy(
+      message_info->publisher_gid.data,
+      msg_data->attachment.copy_gid().data(),
+      RMW_GID_STORAGE_SIZE);
+    message_info->from_intra_process = false;
+  }
   *taken = true;
 
   return RMW_RET_OK;
@@ -480,7 +478,19 @@ rmw_ret_t SubscriptionData::take_serialized_message(
 
   *taken = true;
 
-  fill_message_info(*msg_data, message_info);
+  if (message_info != nullptr) {
+    message_info->source_timestamp = msg_data->attachment.source_timestamp();
+    message_info->received_timestamp = msg_data->recv_timestamp;
+    message_info->publication_sequence_number = msg_data->attachment.sequence_number();
+    message_info->reception_sequence_number =
+      reception_sn_.fetch_add(1, std::memory_order_relaxed);
+    message_info->publisher_gid.implementation_identifier = rmw_zenoh_cpp::rmw_zenoh_identifier;
+    memcpy(
+      message_info->publisher_gid.data,
+      msg_data->attachment.copy_gid().data(),
+      RMW_GID_STORAGE_SIZE);
+    message_info->from_intra_process = false;
+  }
 
   return RMW_RET_OK;
 }
@@ -489,32 +499,9 @@ rmw_ret_t SubscriptionData::take_serialized_message(
 void SubscriptionData::add_new_message(
   std::unique_ptr<SubscriptionData::Message> msg, const std::string & topic_name)
 {
-  std::unique_lock<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(mutex_);
   if (is_shutdown_) {
     return;
-  }
-  if (std::find(msg->attachment.ipc_excluded.begin(), msg->attachment.ipc_excluded.end(),
-    entity_->copy_gid()) != msg->attachment.ipc_excluded.end()) {return;}
-  if (ipc_ingress_) {
-    IpcDecode decode{this, &msg->payload};
-    auto convert = [](void * value, void * output) {
-        auto state = static_cast<IpcDecode *>(value);
-        return state->sub->deserialize(*state->payload, output);
-      };
-    rmw_message_info_t info = rmw_get_zero_initialized_message_info();
-    fill_message_info(*msg, &info);
-    auto result = ipc_ingress_(ipc_user_, &decode, convert, &info);
-    if (result.status) {
-      if (result.status == 2) {data_callback_mgr_.trigger_callback();}
-      if (result.status == 2 && wait_set_data_) {
-        std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
-        wait_set_data_->triggered = true;
-        wait_set_data_->condition_variable.notify_one();
-      }
-      lock.unlock();
-      if (result.release) {result.release(result.retired);}
-      return;
-    }
   }
   const rmw_qos_profile_t adapted_qos_profile = entity_->topic_info().value().qos_;
   if (adapted_qos_profile.history != RMW_QOS_POLICY_HISTORY_KEEP_ALL &&
@@ -585,67 +572,4 @@ std::shared_ptr<GraphCache> SubscriptionData::graph_cache() const
   return graph_cache_;
 }
 
-}  // namespace rmw_zenoh_cpp
-
-namespace rmw_zenoh_cpp
-{
-void SubscriptionData::ipc_configure(
-  rmw_ipc_ready_fn ready, rmw_ipc_ingress_fn ingress,
-  void * user, uint8_t * gid)
-{
-  std::unique_lock<std::mutex> lock(mutex_);
-  ipc_ready_ = ready;
-  ipc_ingress_ = ingress;
-  ipc_user_ = user;
-  while (ipc_ingress_ && !message_queue_.empty()) {
-    auto message = std::move(message_queue_.front());
-    message_queue_.pop_front();
-    IpcDecode decode{this, &message->payload};
-    auto convert = [](void * value, void * output) {
-        auto state = static_cast<IpcDecode *>(value);
-        return state->sub->deserialize(*state->payload, output);
-      };
-    rmw_message_info_t info = rmw_get_zero_initialized_message_info();
-    fill_message_info(*message, &info);
-    auto result = ipc_ingress_(user, &decode, convert, &info);
-    if (!result.status) {
-      message_queue_.push_front(std::move(message));
-      break;
-    }
-    lock.unlock();
-    if (result.release) {result.release(result.retired);}
-    lock.lock();
-  }
-  if (gid) {
-    auto id = entity_->copy_gid();
-    std::copy(id.begin(), id.end(), gid);
-  }
-}
-void SubscriptionData::ipc_notify()
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  data_callback_mgr_.trigger_callback();
-  if (wait_set_data_) {
-    std::lock_guard<std::mutex> wait_lock(wait_set_data_->condition_mutex);
-    wait_set_data_->triggered = true;
-    wait_set_data_->condition_variable.notify_one();
-  }
-}
-}  // namespace rmw_zenoh_cpp
-
-namespace rmw_zenoh_cpp
-{
-rmw_ret_t SubscriptionData::ipc_copy_serialized(
-  void * input, rmw_serialized_message_t * output)
-{
-  auto state = static_cast<IpcDecode *>(input);
-  auto size = state->payload->size();
-  if (output->buffer_capacity < size) {
-    auto ret = rmw_serialized_message_resize(output, size);
-    if (ret != RMW_RET_OK) {return ret;}
-  }
-  memcpy(output->buffer, state->payload->data(), size);
-  output->buffer_length = size;
-  return RMW_RET_OK;
-}
 }  // namespace rmw_zenoh_cpp

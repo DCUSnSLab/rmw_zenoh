@@ -53,7 +53,6 @@
 #include "rmw/impl/cpp/macros.hpp"
 #include "rmw/ret_types.h"
 #include "rmw/rmw.h"
-#include "rmw/intra_process_serialized.h"
 #include "rmw/validate_namespace.h"
 #include "rmw/validate_node_name.h"
 
@@ -2729,70 +2728,4 @@ rmw_zenoh_get_session(const rmw_context_t * context)
   rmw_context_impl_s * context_impl = static_cast<rmw_context_impl_s *>(
     context->impl);
   return context_impl->session();
-}
-
-namespace
-{
-rmw_ret_t ipc_publish(
-  const rmw_publisher_t * pub, const void * message,
-  rmw_ipc_prepare_fn prepare, void * user)
-{
-  auto node = static_cast<rmw_node_t *>(pub->data);
-  auto context = node->context->impl;
-  auto data = context->get_node_data(node)->get_pub_data(pub);
-  return data->publish(message, context->shm().get(), prepare, user);
-}
-void ipc_configure(
-  const rmw_subscription_t * sub, rmw_ipc_ready_fn ready,
-  rmw_ipc_ingress_fn ingress, void * user, uint8_t * gid)
-{
-  static_cast<rmw_zenoh_cpp::SubscriptionData *>(sub->data)->ipc_configure(ready, ingress, user,
-      gid);
-}
-void ipc_notify(const rmw_subscription_t * sub)
-{
-  static_cast<rmw_zenoh_cpp::SubscriptionData *>(sub->data)->ipc_notify();
-}
-}  // namespace
-extern "C" RMW_PUBLIC const rmw_ipc_api_t * rmw_get_intra_process_api_v1()
-{
-  static const rmw_ipc_api_t api{sizeof(rmw_ipc_api_t), 1, ipc_publish, ipc_configure, ipc_notify};
-  return &api;
-}
-
-extern "C" RMW_PUBLIC const rmw_ipc_service_api_t * rmw_get_intra_process_service_api_v1()
-{
-  static const rmw_ipc_service_api_t api{
-    sizeof(rmw_ipc_service_api_t), 1,
-    [](const rmw_client_t * client, const void * message, int64_t * sequence,
-    rmw_ipc_request_fn prepare, void * user) {
-      return static_cast<rmw_zenoh_cpp::ClientData *>(client->data)->send_request_ipc(
-        message, sequence, prepare, user);
-    },
-    [](const rmw_client_t * client, rmw_ipc_ready_fn ready, void * user) {
-      static_cast<rmw_zenoh_cpp::ClientData *>(client->data)->ipc_configure(ready, user);
-    },
-    [](const rmw_service_t * service, rmw_ipc_ready_fn ready, void * user, uint8_t * gid) {
-      auto data = static_cast<rmw_zenoh_cpp::ServiceData *>(service->data);
-      data->ipc_configure(ready, user);
-      if (gid) {
-        auto id = data->copy_gid();
-        std::copy(id.begin(), id.end(), gid);
-      }
-    },
-    [](const rmw_client_t * client) {
-      static_cast<rmw_zenoh_cpp::ClientData *>(client->data)->ipc_notify();
-    },
-    [](const rmw_service_t * service) {
-      static_cast<rmw_zenoh_cpp::ServiceData *>(service->data)->ipc_notify();
-    }};
-  return &api;
-}
-
-extern "C" RMW_PUBLIC const rmw_ipc_serialized_api_t * rmw_get_intra_process_serialized_api_v1()
-{
-  static const rmw_ipc_serialized_api_t api{
-    sizeof(rmw_ipc_serialized_api_t), 1,
-    rmw_zenoh_cpp::SubscriptionData::ipc_copy_serialized};
-  return &api;
 }

@@ -37,7 +37,6 @@
 #include "rcutils/allocator.h"
 
 #include "rmw/rmw.h"
-#include "rmw/intra_process_service.h"
 #include "rmw/ret_types.h"
 
 namespace rmw_zenoh_cpp
@@ -61,8 +60,6 @@ public:
 
   // Borrow the immutable TopicInfo owned by this ServiceData's Entity.
   const liveliness::TopicInfo & topic_info() const;
-
-  std::array<uint8_t, RMW_GID_STORAGE_SIZE> copy_gid() const;
 
   // Returns true if liveliness token is still valid.
   bool liveliness_is_valid() const;
@@ -96,9 +93,6 @@ public:
   // Check if this ServiceData is shutdown.
   bool is_shutdown() const;
 
-  void ipc_configure(rmw_ipc_ready_fn ready, void * user);
-  void ipc_notify();
-
   // Destructor.
   ~ServiceData();
 
@@ -115,8 +109,6 @@ private:
     std::unique_ptr<RequestTypeSupport> request_type_support,
     std::unique_ptr<ResponseTypeSupport> response_type_support);
 
-  rmw_ipc_ready_fn ipc_ready_ = nullptr;
-  void * ipc_user_ = nullptr;
   // Internal mutex.
   mutable std::mutex mutex_;
   // The parent node.

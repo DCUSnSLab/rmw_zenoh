@@ -34,7 +34,6 @@
 #include "rcutils/allocator.h"
 
 #include "rmw/rmw.h"
-#include "rmw/intra_process.h"
 #include "rmw/ret_types.h"
 
 namespace rmw_zenoh_cpp
@@ -56,9 +55,10 @@ public:
     const rmw_qos_profile_t * qos_profile);
 
   // Publish a ROS message.
-  rmw_ret_t publish(const void * ros_message, ShmContext * shm);
   rmw_ret_t publish(
-    const void * ros_message, ShmContext * shm, rmw_ipc_prepare_fn prepare, void * user);
+    const void *ros_message,
+    ShmContext *shm
+  );
 
   // Publish a serialized ROS message.
   rmw_ret_t publish_serialized_message(
