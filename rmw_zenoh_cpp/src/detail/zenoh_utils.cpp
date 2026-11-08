@@ -72,18 +72,6 @@ int64_t get_system_time_in_ns()
 }
 
 ///=============================================================================
-std::vector<uint8_t> flatten(const zenoh::Bytes & bytes)
-{
-  std::vector<uint8_t> flat;
-  flat.reserve(bytes.size());
-  auto slices = bytes.slice_iter();
-  while (auto slice = slices.next()) {
-    flat.insert(flat.end(), slice->data, slice->data + slice->len);
-  }
-  return flat;
-}
-
-///=============================================================================
 Payload::Payload(const zenoh::Bytes & bytes)
 {
   // NOTE(fuzzypixelz): `zenoh::Bytes` is an list of reference-couted buffers. When the list of
@@ -102,7 +90,7 @@ Payload::Payload(const zenoh::Bytes & bytes)
     if (!slices.next().has_value()) {
       bytes_ = Contiguous {slice.value(), bytes.clone()};
     } else {
-      bytes_ = flatten(bytes);
+      bytes_ = bytes.as_vector();
     }
   }
 }
